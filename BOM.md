@@ -136,16 +136,80 @@ Source: Stewart-MacDonald (StewMac), Luthiers Mercantile International (LMI),
 Notre Dame de Bois (NDB), or any local luthier supplier. Quartersawn 3 mm
 soundboard blanks pre-jointed and pre-thicknessed are available stock items.
 
-Bracing: TBD — small fan-brace or simple ladder bracing of spruce stripping,
-glued to the underside of the soundboard along the string-direction axis.
+### Soundboard bracing
 
-### Soundbox
+The string-pull line (eyelet centers, ≈238 mm bass→treble) sits directly on
+the underside stringband, which carries essentially all 55 kg of string
+load. Two fan braces stiffen the soundboard against drum-mode flexing while
+leaving the lower-bout area (below the strings) free to vibrate.
 
-Assembly: cheeks (Baltic birch per the layer breakdown above), back, sides,
-internal bracing. Layout TBD.
+| qty | brace            | material            | dimensions                  | placement                                                                 |
+|-----|------------------|---------------------|-----------------------------|---------------------------------------------------------------------------|
+| 1   | stringband       | hard maple (or walnut), quartersawn | ~10 mm wide × 8 mm tall × ~260 mm long | underside of soundboard, directly under the eyelet line, full length |
+| 2   | fan brace        | Sitka spruce stripping | ~5 mm wide × 8 mm tall × ~160 mm long | underside of soundboard, fanning ±15° from the stringband mid-point toward the lower bout edges |
+| 2   | end caps         | Sitka spruce        | ~10 × 10 × 30 mm            | glued at each end of the stringband to reinforce the column-foot and soundbox-top tabs |
 
-Fasteners (screws, dowels) and adhesives (Titebond Original PVA for plywood,
-hide glue or Titebond for the soundboard if you want reversibility): TBD.
+Glue with hide glue (best for tone, fully reversible) or Titebond Original
+PVA (easier and still acceptable for a prototype). Brace the soundboard
+**before** trimming to final shape so braces stiffen the panel during
+final scraping.
+
+### Soundbox internals
+
+| qty | part                | material            | notes                                                                            |
+|-----|---------------------|---------------------|----------------------------------------------------------------------------------|
+| 1   | back panel          | 3 mm Baltic birch or 3 mm Sitka | parallel to the soundboard, glued to the back edges of the soundbox cheeks |
+| 2   | bass / treble blocks | hard maple or Baltic birch | 12 × 18 × ~60 mm — solid blocks at each end where the soundboard tabs slot in; takes the full string-tension transfer to the cheeks |
+| ~30 | kerfed linings      | basswood or spruce kerfing | ~6 × 8 mm strip, glued continuously around the inside perimeter of the soundbox cheeks; provides ~6 mm of gluing surface for the back and soundboard |
+| 2-4 | transverse braces   | Sitka spruce        | ~6 × 10 mm, cross-braced inside the box if needed to suppress unwanted modes (tunable during build) |
+
+### Sound holes
+
+**Two ovals on the back panel**, vertically aligned along the box centerline.
+
+- Shape: ovals, 40 mm long × 22 mm wide each (long axis parallel to the
+  player-facing centerline of the box).
+- Total open area: 2 × π × 20 × 11 = **≈ 1380 mm²**.
+- Placement: centered laterally on the back panel; one centered roughly at
+  the bass-half of the box (1/3 of the way from the bass end), the other at
+  the treble-half (2/3 of the way from the bass end).
+
+Tuning rationale (Helmholtz resonator):
+
+$$f_{H} = \frac{c}{2\pi}\sqrt{\dfrac{A}{V\,L_{eff}}}$$
+
+- Estimated soundbox internal volume V ≈ 238 × 60 × 50 mm ≈ **7.1 × 10⁻⁴ m³**.
+- Effective hole length L_eff ≈ 3 mm (back-panel thickness) + π·r/2 end
+  correction × 2 ≈ ~18 mm.
+- With A = 1380 mm² and the values above: **f_H ≈ 290 Hz**, about an octave
+  below the bass C5 (523 Hz). This puts the Helmholtz peak near the
+  fundamental of the missing-low-octave (C4) — exactly where the small
+  soundbox most needs help projecting bass response.
+
+Why two holes instead of one big one:
+
+- Two holes spread along the bass→treble axis couple to the soundboard's
+  upper and lower bouts more evenly than a single central hole.
+- Ovals (vs round) place more open area near the box centerline (where
+  the soundboard is structurally weakest) without removing material near
+  the side glue joints (where the soundbox needs strength).
+- Long-axis along the centerline keeps the perimeter glue joint to the
+  back-panel kerfing uninterrupted on each side.
+
+Variants to consider during build:
+
+- If bass response is thin, **enlarge each oval to 45 × 25 mm** (raises A
+  by ~30%, drops f_H modestly toward C4).
+- If the box sounds boomy / one-note, **add a third smaller round hole**
+  (~10 mm diameter) at the centerline between the two ovals; this raises
+  f_H toward D4/E4 and broadens the resonance.
+- For a more traditional Paraguayan look, **stylize the oval edges** with
+  Celtic-knot or geometric piercings around each hole (purely cosmetic,
+  no measurable acoustic effect at these sizes).
+
+Fasteners (screws, dowels) and adhesives (Titebond Original PVA for
+plywood; hide glue or Titebond for the soundboard / tonewood if you want
+reversibility): TBD.
 
 ## Electronics
 
