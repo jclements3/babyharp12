@@ -18,6 +18,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 import svgwrite
+import sys
+sys.path.insert(0, str(Path(__file__).parent))
+from bezierfit import fit_curve as _fit_curve
+import numpy as np
 
 # ==================================================================
 # PARAMETERS
@@ -38,9 +42,10 @@ EYELET_ID_MM         = 2.0    # inner diameter of each soundbox eyelet hole.
                               # tension, so the eyelet center sits below the
                               # string center by (eyelet_r - string_r).
 SMALL_CIRCLE_DIA_MM  = 3.0    # small-hole (string-guide PIN) OD
-BIG_CIRCLE_DIA_MM    = 9.0    # big-hole (TUNER) OD; used for mm scale.
-                              # Bumped from 6 -> 9 to scale the whole harp 1.5x
-                              # so the strings get realistic nylon lengths.
+BIG_CIRCLE_DIA_MM    = 7.0    # big-hole (TUNER) OD; used for mm scale.
+                              # Sized so the equally-spaced eyelets produce
+                              # a perpendicular OD-to-OD air gap of ~13mm
+                              # between adjacent strings.
 NUM_STRINGS          = 12
 
 # --- Pin -> tuner routing ----------------------------------------------------
@@ -249,39 +254,33 @@ def main():
         for i, n in enumerate(NOTES)
     ]
 
-    # Iterate: eyelet spacing depends on string diameters, which depend on
-    # string LENGTHS (which depend on eyelet positions). Converge.
-    for s in specs: s.diameter_mm = 1.5
-    for _ in range(5):
-        # ---- Eyelets along soundboard ----
-        # Bass eyelet at BASS_OFFSET_MM up the soundboard from column foot.
-        # Each next eyelet steps up by (perp_air_gap + avg_string_r)/sin(rake)
-        # so the perpendicular gap between adjacent string ODs is AIR_GAP.
-        ce_first = add(INNER_COLUMN_FOOT,
-                       mul(SB_DIR, BASS_OFFSET_MM * INNER_PER_MM))
-        specs[0].eyelet = ce_first
-        for i in range(1, NUM_STRINGS):
-            perp_step_mm = (STRING_AIR_GAP_MM
-                            + (specs[i-1].diameter_mm + specs[i].diameter_mm)/2)
-            step_inner = (perp_step_mm / sin_rake) * INNER_PER_MM
-            specs[i].eyelet = add(specs[i-1].eyelet, mul(SB_DIR, step_inner))
+    # ---- Eyelets equally spaced between column foot (C7) and soundbox top
+    # corner (S0). With N strings, total distance = (N+1)*X. So eyelet i
+    # sits at (i+1)*X along the soundboard from C7. The end gaps (C7 to
+    # eyelet 0 and eyelet N-1 to S0) equal X.
+    SOUNDBOX_TOP_CORNER = (2918.0, 2807.3)         # = S0
+    total_inner = math.hypot(SOUNDBOX_TOP_CORNER[0] - INNER_COLUMN_FOOT[0],
+                             SOUNDBOX_TOP_CORNER[1] - INNER_COLUMN_FOOT[1])
+    step_inner = total_inner / (NUM_STRINGS + 1)
+    for i in range(NUM_STRINGS):
+        specs[i].eyelet = add(INNER_COLUMN_FOOT,
+                              mul(SB_DIR, (i + 1) * step_inner))
 
-        # ---- Pin (string tip) END point: project original small-hole onto
-        #      the parallel string line from the eyelet. ----
-        for i, pin_orig in enumerate(SMALL_HOLES_INNER):
-            v = sub(pin_orig, specs[i].eyelet)
-            t = v[0]*str_dir[0] + v[1]*str_dir[1]
-            tip = add(specs[i].eyelet, mul(str_dir, t))
-            # Store tip in spec.pin TEMPORARILY; overwritten below with the
-            # real pin-center offset.
-            specs[i].pin = tip
+    # ---- Pin (string tip) END point: project original small-hole onto the
+    #      parallel string line from the eyelet.
+    for i, pin_orig in enumerate(SMALL_HOLES_INNER):
+        v = sub(pin_orig, specs[i].eyelet)
+        t = v[0]*str_dir[0] + v[1]*str_dir[1]
+        tip = add(specs[i].eyelet, mul(str_dir, t))
+        specs[i].pin = tip
 
-        # ---- Vibrating length + required diameter ----
-        for s in specs:
-            s.length_mm = vibrating_length_mm(s.eyelet, s.pin)
-            s.diameter_mm = diameter_for_freq_mm(s.length_mm, s.freq_hz,
-                                                 s.tension_n,
-                                                 STRING_DENSITY_KG_M3)
+    # ---- Vibrating length + required diameter (no iteration needed since
+    # eyelet positions are fixed). ----
+    for s in specs:
+        s.length_mm = vibrating_length_mm(s.eyelet, s.pin)
+        s.diameter_mm = diameter_for_freq_mm(s.length_mm, s.freq_hz,
+                                             s.tension_n,
+                                             STRING_DENSITY_KG_M3)
 
     # ---- Final eyelet center adjustment: shift eyelet center DOWN the
     # soundboard by (eyelet_r - string_r) so the string sits against the
@@ -293,15 +292,19 @@ def main():
         s.eyelet = (s.eyelet[0] - SB_DIR[0]*off, s.eyelet[1] - SB_DIR[1]*off)
 
     # ---- Final pin center: shift from the string tip perpendicular to the
-    # string by (pin_r + string_r) so the pin OD is tangent to the string OD
-    # on the RIGHT side of the string. ----
+    # string by (pin_r + string_r) so the pin OD is tangent to the string OD.
+    # IMPORTANT: recompute the tip from the FINAL (adjusted) eyelet position,
+    # so the perpendicular offset is measured from the actual string line.
     pin_r_inner = (SMALL_CIRCLE_DIA_MM/2) * INNER_PER_MM
     str_up = (-str_dir[0], -str_dir[1])
     perpA = (-str_up[1],  str_up[0])
     perpB = ( str_up[1], -str_up[0])
     pin_perp = perpA if perpA[0] > perpB[0] else perpB
-    for s in specs:
-        tip = s.pin
+    for i, s in enumerate(specs):
+        pin_orig = SMALL_HOLES_INNER[i]
+        v = sub(pin_orig, s.eyelet)
+        t = v[0]*str_dir[0] + v[1]*str_dir[1]
+        tip = add(s.eyelet, mul(str_dir, t))
         string_r_inner = (s.diameter_mm/2) * INNER_PER_MM
         off = pin_r_inner + string_r_inner
         s.pin = (tip[0] + pin_perp[0]*off, tip[1] + pin_perp[1]*off)
@@ -370,8 +373,8 @@ def main():
         t = strip_leading_M(d)
         return ('l ' + t) if (t and t[0] not in 'MmLlHhVvCcSsQqTtAaZz') else t
 
-    # Closed COMBINED paths for each region.
-    d_neck     = f"{d_neck_arch} Z"
+    # Closed COMBINED paths for each region (d_neck built below from Bezier
+    # fit so it can use the parsed nodes).
     d_soundbox = f"{d_sb_left} L {strip_leading_M(d_sb_right)} Z"
 
     # ---- Parse the column polylines to find their control nodes -----------
@@ -401,6 +404,7 @@ def main():
         return pts
     p68_pts = parse_abs_pts(d_col_back)
     p70_pts = parse_abs_pts(d_col_front)
+    p20_pts = parse_abs_pts(d_neck_arch)
 
     def extreme_x_inflection(pts):
         interior = pts[1:-1] if len(pts) > 2 else pts
@@ -427,6 +431,15 @@ def main():
     p70_left  = extreme_x_inflection(p70_pts)
     i_waist_idx = max(range(len(p68_pts)), key=lambda j: p68_pts[j][0])
     p68_lower = min(p68_pts[i_waist_idx+1:-1], key=lambda p: p[0])
+
+    # Neck control nodes (path20 outer arch). Walking the polyline forward:
+    # start (right joint corner) -> rightmost -> topmost -> leftmost ->
+    # sharp 90° corner -> end (left joint corner).
+    xs20 = [p[0] for p in p20_pts]; ys20 = [p[1] for p in p20_pts]
+    n20_max_x = p20_pts[xs20.index(max(xs20))]
+    n20_max_y = p20_pts[ys20.index(max(ys20))]
+    n20_min_x = p20_pts[xs20.index(min(xs20))]
+    n20_sharp = find_sharp_corner(p20_pts)
 
     # ---- Curve-fit the column polylines into Bezier segments ---------------
     # The original SVG has path68 and path70 as polylines of hundreds of tiny
@@ -469,7 +482,7 @@ def main():
 
     # Stash the fit handles so we can label/visualize them later.
     # path68 segment node order, top -> base-left:
-    p68_seq = [(859.996, 3506.9), p68_sharp, p68_left, p68_waist, p68_lower,
+    p68_seq = [(859.996, 3506.9), n20_sharp, p68_left, p68_waist, p68_lower,
                (1244.0, 66.5)]
     p70_seq = [(1787.0, 847.102), p70_left, (859.996, 3506.9)]
 
@@ -483,19 +496,225 @@ def main():
             out.append((c1, c2, seq[k+1]))
         return out
 
-    p68_beziers = beziers_along(p68_seq, p68_pts)
-    p70_beziers = beziers_along(p70_seq, p70_pts)
+    # Use Schneider's adaptive algorithm for the column curves too — much
+    # better fit than a single Bezier between each pair of structural nodes.
+    def schneider_fit(pts, max_error=300.0):
+        arr = np.array([list(p) for p in pts], dtype=float)
+        bezs = _fit_curve(arr, max_error=max_error)
+        out = []
+        for bz in bezs:
+            c1 = (float(bz[1][0]), float(bz[1][1]))
+            c2 = (float(bz[2][0]), float(bz[2][1]))
+            p3 = (float(bz[3][0]), float(bz[3][1]))
+            out.append((c1, c2, p3))
+        seq = [(float(bezs[0][0][0]), float(bezs[0][0][1]))] + [b[2] for b in out]
+        return seq, out
+
+    p68_seq, p68_beziers = schneider_fit(p68_pts, max_error=300.0)
+    p70_seq, p70_beziers = schneider_fit(p70_pts, max_error=300.0)
+
+    # User adjustment: move C0 (top of column, where path68/path70 meet) and
+    # C8 (inner-curve leftmost bulge) LEFT by 6mm. Move their adjacent Bezier
+    # control handles by the same amount so curve shape at those nodes is
+    # preserved.
+    def shift_seq_node(seq, beziers, target, dx, dy, tol=20):
+        """Find the seq entry closest to `target` and shift it + adjacent
+        Bezier handles by (dx, dy). Mutates `seq` and `beziers` in place."""
+        idx = min(range(len(seq)),
+                  key=lambda i: (seq[i][0]-target[0])**2 + (seq[i][1]-target[1])**2)
+        if math.hypot(seq[idx][0]-target[0], seq[idx][1]-target[1]) > tol:
+            return  # no nearby node, skip
+        seq[idx] = (seq[idx][0]+dx, seq[idx][1]+dy)
+        # Bezier ending AT this node: index = idx - 1 (if exists)
+        if idx > 0:
+            c1, c2, p3 = beziers[idx-1]
+            beziers[idx-1] = (c1, (c2[0]+dx, c2[1]+dy),
+                              (p3[0]+dx, p3[1]+dy))
+        # Bezier starting FROM this node: index = idx (if exists)
+        if idx < len(beziers):
+            c1, c2, p3 = beziers[idx]
+            beziers[idx] = ((c1[0]+dx, c1[1]+dy), c2, p3)
+
+    shift_mm = -6.0
+    dx_shift = shift_mm * INNER_PER_MM
+    # Only C8 (inner curve bulge) gets the manual -6mm shift; C0 (column top)
+    # is REPOSITIONED to where the C8->C0 arc trajectory intersects the neck
+    # outline (path20), so the column top tucks into the neck contour.
+    shift_seq_node(p70_seq, p70_beziers, p70_left, dx_shift, 0)
+
+    # Compute intersection of the (C8->C0 arc tangent at C0) with path20.
+    last_p70 = p70_beziers[-1]               # (c1, c2, p3) ending at OLD C0
+    c2_at_c0 = last_p70[1]
+    old_c0   = last_p70[2]
+    tangent  = unit(sub(old_c0, c2_at_c0))
+
+    def ray_polyline_intersect(O, d, pts):
+        best_t = None; best_pt = None; best_i = -1
+        for i in range(len(pts) - 1):
+            A, B = pts[i], pts[i+1]
+            sx, sy = B[0]-A[0], B[1]-A[1]
+            det = -d[0]*sy + d[1]*sx
+            if abs(det) < 1e-9: continue
+            t = (-(A[0]-O[0])*sy + (A[1]-O[1])*sx) / det
+            s = (d[0]*(A[1]-O[1]) - d[1]*(A[0]-O[0])) / det
+            if t > 1e-6 and 0 <= s <= 1:
+                if best_t is None or t < best_t:
+                    best_t = t
+                    best_pt = (O[0] + t*d[0], O[1] + t*d[1])
+                    best_i = i
+        return best_pt, best_i
+
+    # NEW C0 = the point on path20 directly above C8 (same X, highest Y
+    # near that X), then slide 6mm DOWN the curve toward the RIGHT (toward
+    # smaller path20 indices = back toward N2/N1/N0 = right joint).
+    c8_x = p70_left[0] + dx_shift
+    near_x = [(i, p) for i, p in enumerate(p20_pts) if abs(p[0] - c8_x) < 60]
+    if near_x:
+        c0_neck_idx, new_c0 = max(near_x, key=lambda ip: ip[1][1])
+    else:
+        new_c0, c0_neck_idx = ray_polyline_intersect(old_c0, tangent, p20_pts)
+        if new_c0 is None: new_c0 = old_c0; c0_neck_idx = 0
+
+    SLIDE_C0_MM = 12.0
+    slide_inner = SLIDE_C0_MM * INNER_PER_MM
+    walked = 0.0
+    j = c0_neck_idx
+    while j > 0 and walked < slide_inner:
+        seg = math.hypot(p20_pts[j][0]-p20_pts[j-1][0],
+                         p20_pts[j][1]-p20_pts[j-1][1])
+        walked += seg
+        j -= 1
+    c0_neck_idx = j
+    new_c0 = p20_pts[c0_neck_idx]
+
+    # Extend the last p70 Bezier so its endpoint is the new C0 (preserve
+    # the relative position of c2 so the tangent direction is preserved).
+    extra_dx = new_c0[0] - old_c0[0]
+    extra_dy = new_c0[1] - old_c0[1]
+    shift_seq_node(p70_seq, p70_beziers, old_c0, extra_dx, extra_dy)
+
+    # N4 = sharp corner on path20 at index 546 (same point as path68 sharp).
+    N4_NECK_IDX = 546
+
+    # Neck: use Schneider's adaptive curve-fit (Graphics Gems) — produces
+    # multiple Beziers automatically based on max_error tolerance.
+    _pts_arr = np.array([list(p) for p in p20_pts], dtype=float)
+    _schneider_beziers = _fit_curve(_pts_arr, max_error=400.0)
+    # Schneider returns list of arrays of 4 control points each.
+    # Convert to our (c1, c2, p3) tuple format.
+    p20_beziers = []
+    for bez in _schneider_beziers:
+        c1 = (float(bez[1][0]), float(bez[1][1]))
+        c2 = (float(bez[2][0]), float(bez[2][1]))
+        p3 = (float(bez[3][0]), float(bez[3][1]))
+        p20_beziers.append((c1, c2, p3))
+    # The node sequence is the endpoint of each Bezier (plus the start).
+    p20_seq = [(float(_schneider_beziers[0][0][0]),
+                float(_schneider_beziers[0][0][1]))] + \
+              [b[2] for b in p20_beziers]
+
+    # Force a SHARP corner at N4. Schneider's smooth fit leaves the in/out
+    # tangents at N4 nearly parallel (45°ish on both sides), producing a
+    # rounded transition with a visible ripple. Override cp2 of the bezier
+    # ending at N4 and cp1 of the bezier starting at N4 so the tangents
+    # align with the actual polyline directions (N4 - prev_pt) and
+    # (next_pt - N4) — preserving the original handle magnitudes.
+    n4_bez_idx = min(range(len(p20_beziers)),
+                     key=lambda i: (p20_beziers[i][2][0]-n20_sharp[0])**2
+                                 + (p20_beziers[i][2][1]-n20_sharp[1])**2)
+    incoming_dir = unit(sub(n20_sharp, p20_pts[N4_NECK_IDX-1]))
+    outgoing_dir = unit(sub(p20_pts[N4_NECK_IDX+1], n20_sharp))
+    # bezier ENDING at N4: replace cp2 so end-tangent (end - cp2) = incoming_dir
+    c1_in, c2_in, p3_in = p20_beziers[n4_bez_idx]
+    mag_in = math.hypot(c2_in[0]-p3_in[0], c2_in[1]-p3_in[1])
+    new_c2_in = (p3_in[0] - mag_in * incoming_dir[0],
+                 p3_in[1] - mag_in * incoming_dir[1])
+    p20_beziers[n4_bez_idx] = (c1_in, new_c2_in, p3_in)
+    # bezier STARTING at N4: replace cp1 so start-tangent (cp1 - start) = outgoing_dir
+    if n4_bez_idx + 1 < len(p20_beziers):
+        c1_out, c2_out, p3_out = p20_beziers[n4_bez_idx + 1]
+        start_out = n20_sharp
+        mag_out = math.hypot(c1_out[0]-start_out[0], c1_out[1]-start_out[1])
+        new_c1_out = (start_out[0] + mag_out * outgoing_dir[0],
+                      start_out[1] + mag_out * outgoing_dir[1])
+        p20_beziers[n4_bez_idx + 1] = (new_c1_out, c2_out, p3_out)
 
     def bez_str(b):
         c1, c2, p = b
         return (f"C {c1[0]:.2f} {c1[1]:.2f} {c2[0]:.2f} {c2[1]:.2f} "
                 f"{p[0]:.2f} {p[1]:.2f}")
+    # Column path: trace the EXACT neck beziers (so the shared boundary
+    # matches pixel-for-pixel), then path68 beziers, base, path70 beziers.
+    # Split the neck bezier that contains new_c0 at the closest-t (de Casteljau)
+    # to introduce an exact bezier endpoint there.
+    def bez_eval(P0, P1, P2, P3, t):
+        u = 1 - t
+        return (u*u*u*P0[0] + 3*u*u*t*P1[0] + 3*u*t*t*P2[0] + t*t*t*P3[0],
+                u*u*u*P0[1] + 3*u*u*t*P1[1] + 3*u*t*t*P2[1] + t*t*t*P3[1])
+    def bez_split(P0, P1, P2, P3, t):
+        # de Casteljau split at t; returns (first_bez, second_bez) each as
+        # (c1, c2, p3) with implicit start = P0 / split_pt respectively.
+        Q0 = (P0[0]+t*(P1[0]-P0[0]), P0[1]+t*(P1[1]-P0[1]))
+        Q1 = (P1[0]+t*(P2[0]-P1[0]), P1[1]+t*(P2[1]-P1[1]))
+        Q2 = (P2[0]+t*(P3[0]-P2[0]), P2[1]+t*(P3[1]-P2[1]))
+        R0 = (Q0[0]+t*(Q1[0]-Q0[0]), Q0[1]+t*(Q1[1]-Q0[1]))
+        R1 = (Q1[0]+t*(Q2[0]-Q1[0]), Q1[1]+t*(Q2[1]-Q1[1]))
+        S  = (R0[0]+t*(R1[0]-R0[0]), R0[1]+t*(R1[1]-R0[1]))
+        return (Q0, R0, S), (R1, Q2, P3), S
+    # find which p20_beziers segment contains the closest point to new_c0
+    best = None
+    for bi, (c1, c2, p3) in enumerate(p20_beziers):
+        p0 = p20_seq[bi]
+        for ti in range(1, 200):
+            t = ti / 200.0
+            x, y = bez_eval(p0, c1, c2, p3, t)
+            d2 = (x-new_c0[0])**2 + (y-new_c0[1])**2
+            if best is None or d2 < best[0]:
+                best = (d2, bi, t, p0, c1, c2, p3)
+    _, split_bi, split_t, P0, P1, P2, P3 = best
+    _, second_half, split_pt = bez_split(P0, P1, P2, P3, split_t)
+    # Snap new_c0 to the exact split point so column & neck share the boundary.
+    new_c0 = split_pt
+    # Find bezier index ending at n20_sharp.
+    n4_bi = min(range(len(p20_beziers)),
+                key=lambda i: (p20_beziers[i][2][0]-n20_sharp[0])**2
+                            + (p20_beziers[i][2][1]-n20_sharp[1])**2)
+    # Re-extend the last p70 Bezier so its endpoint = updated new_c0.
+    p70_last = p70_beziers[-1]
+    p70_beziers[-1] = (p70_last[0], p70_last[1], new_c0)
+    p70_seq[-1] = new_c0
+
+    # C3 -> next bezier endpoint: collapse the C3->C4 and C4->next pair into
+    # a single sweeping bezier (C4 removed as a node). C3's exit handle is
+    # extended to roughly the magnitude C4's old exit handle had, so the
+    # curve sweeps smoothly from the sharp corner down to where the column
+    # back starts curving right toward the waist — without the localized
+    # bulge that the forced X-minimum at C4 produced.
+    first_p68  = p68_beziers[1]
+    second_p68 = p68_beziers[2]
+    _c1_old, _c2_old, _c4_old = first_p68
+    c1_next, c2_next, p3_next = second_p68
+    mag_c3_out_extended = math.hypot(c1_next[0]-_c4_old[0],
+                                     c1_next[1]-_c4_old[1])
+    extended_cp1_c3 = (n20_sharp[0] + mag_c3_out_extended * incoming_dir[0],
+                       n20_sharp[1] + mag_c3_out_extended * incoming_dir[1])
+    merged_c3_to_next = (extended_cp1_c3, c2_next, p3_next)
+
     d_column = " ".join([
-        f"M {p70_seq[0][0]:.2f} {p70_seq[0][1]:.2f}",
-        *[bez_str(b) for b in p70_beziers],
-        *[bez_str(b) for b in p68_beziers],
+        f"M {new_c0[0]:.2f} {new_c0[1]:.2f}",
+        bez_str(second_half),
+        *[bez_str(b) for b in p20_beziers[split_bi+1 : n4_bi+1]],
+        bez_str(merged_c3_to_next),
+        *[bez_str(b) for b in p68_beziers[3:]],
         "L 1244 67.6992 L 1335.2 67.6992",
-        "L 1337 67.6992 L 1339.4 71.3008 L 1787 847.102 Z",
+        "L 1337 67.6992 L 1339.4 71.3008 L 1787 847.102",
+        *[bez_str(b) for b in p70_beziers],
+        "Z",
+    ])
+    d_neck = " ".join([
+        f"M {p20_seq[0][0]:.2f} {p20_seq[0][1]:.2f}",
+        *[bez_str(b) for b in p20_beziers],
+        "Z",
     ])
     d_joint_z  = d_joint    # path72 is already closed
 
@@ -520,6 +739,92 @@ def main():
     g_neck.add(dwg.path(d=d_neck, id="neck_outline"))
     g_inner.add(g_neck)
 
+    # NECK SPACER: the slab of neck material between the joint (right edge of
+    # path20 = the implicit N5->N0 closing line) and the vertical above the
+    # treble-most (G6) eyelet. It traces the EXACT neck beziers on its top
+    # and bottom edges (so it tucks into the neck just like the column tucks
+    # into the bass end), and its left edge is a vertical line at x = G6_eyelet.x.
+    target_x = specs[-1].eyelet[0]
+    # Find (bezier index, t) for the upper and lower x=target_x crossings.
+    crossings = []  # list of (bi, t, x, y)
+    for bi, (c1, c2, p3) in enumerate(p20_beziers):
+        p0 = p20_seq[bi]
+        prev_x = p0[0]; prev_t = 0.0
+        for ti in range(1, 401):
+            t = ti / 400.0
+            u = 1 - t
+            x = u*u*u*p0[0] + 3*u*u*t*c1[0] + 3*u*t*t*c2[0] + t*t*t*p3[0]
+            if (prev_x - target_x) * (x - target_x) <= 0 and prev_x != x:
+                f = (target_x - prev_x) / (x - prev_x)
+                t_cross = prev_t + f * (t - prev_t)
+                y_cross = bez_eval(p0, c1, c2, p3, t_cross)[1]
+                crossings.append((bi, t_cross, target_x, y_cross))
+            prev_x = x; prev_t = t
+    if len(crossings) >= 2:
+        # Upper crossing = larger Y (max-Y in inner coords). Lower = smaller Y.
+        up = max(crossings, key=lambda c: c[3])
+        lo = min(crossings, key=lambda c: c[3])
+        up_bi, up_t, _, up_y = up
+        lo_bi, lo_t, _, lo_y = lo
+
+        # Split each bezier at its crossing.
+        P0u = p20_seq[up_bi]
+        c1u, c2u, p3u = p20_beziers[up_bi]
+        first_up, second_up, split_up = bez_split(P0u, c1u, c2u, p3u, up_t)
+        # second_up goes (split_up_pt -> p3u). To trace from split toward N0
+        # (which is p20_seq[0] = start of bezier 0), we need to go in REVERSE
+        # through the FIRST half then through the earlier beziers in reverse.
+        # Since up_bi is bezier 0 here, we just need the first_up reversed.
+
+        P0l = p20_seq[lo_bi]
+        c1l, c2l, p3l = p20_beziers[lo_bi]
+        first_lo, second_lo, split_lo = bez_split(P0l, c1l, c2l, p3l, lo_t)
+        # second_lo goes (split_lo_pt -> p3l = N5). Forward direction works.
+
+        def rev_bez(P0, P1, P2, P3):
+            # Reverse a cubic bezier: returns (start, c1, c2, p3) for the
+            # reversed segment going P3 -> P0.
+            return (P3, P2, P1, P0)
+
+        # Spacer trace (counter-clockwise from lower-left):
+        # 1. M (split_lo_pt) at x=target_x, y=lo_y
+        # 2. L (split_up_pt) — vertical line up
+        # 3. Reverse first_up: from split_up_pt back to P0u (= N0)
+        # 4. L from N0 (p20_seq[0]) to N5 (p20_pts[-1] = p3 of last bezier)
+        # 5. Forward second_lo: from split_lo_pt... wait, we need to go FROM
+        #    N5 BACK to split_lo_pt. second_lo goes split_lo_pt -> N5 forward,
+        #    so we need it REVERSED.
+        # Actually simpler: trace CCW starting from N0.
+        #   M N0
+        #   L N5  (closing line, going down-left)
+        #   reversed(second_lo): N5 -> split_lo_pt
+        #   L split_up_pt (vertical up)
+        #   reversed(first_up): split_up_pt -> N0
+        #   Z
+        N0_pt = p20_seq[0]
+        N5_pt = p20_seq[-1]
+        # Reverse second_lo for tracing N5 -> split_lo_pt
+        rev_second_lo_P0, rev_second_lo_c1, rev_second_lo_c2, rev_second_lo_p3 = \
+            rev_bez(split_lo, second_lo[0], second_lo[1], second_lo[2])
+        # Reverse first_up for tracing split_up_pt -> N0
+        rev_first_up_P0, rev_first_up_c1, rev_first_up_c2, rev_first_up_p3 = \
+            rev_bez(P0u, first_up[0], first_up[1], first_up[2])
+
+        d_spacer = " ".join([
+            f"M {N0_pt[0]:.2f} {N0_pt[1]:.2f}",
+            f"L {N5_pt[0]:.2f} {N5_pt[1]:.2f}",
+            bez_str((rev_second_lo_c1, rev_second_lo_c2, rev_second_lo_p3)),
+            f"L {split_up[0]:.2f} {split_up[1]:.2f}",
+            bez_str((rev_first_up_c1, rev_first_up_c2, rev_first_up_p3)),
+            "Z",
+        ])
+        g_spacer = dwg.g(id="neck_spacer",
+                         fill="#aa6600", fill_opacity=0.45,
+                         stroke="#aa6600", stroke_width="7.2",
+                         stroke_linecap="round", stroke_linejoin="round")
+        g_spacer.add(dwg.path(d=d_spacer, id="neck_spacer_outline"))
+        g_inner.add(g_spacer)
+
     g_column = dwg.g(id="column",
                      fill="#00aa00", fill_opacity=0.25,
                      stroke="#00aa00", stroke_width="7.2",
@@ -542,7 +847,8 @@ def main():
     g_inner.add(g_joint)
 
     # STRINGS — one path per note, going eyelet -> pin arc -> tuner arc.
-    g_strings = dwg.g(id="strings", fill="none", stroke_linecap="round")
+    g_strings = dwg.g(id="strings", fill="none",
+                      stroke_linecap="round", stroke_linejoin="round")
     for s in specs:
         sr = (s.diameter_mm/2) * INNER_PER_MM
         v = sub(s.pin, s.eyelet)
@@ -647,62 +953,51 @@ def main():
     # The path68/path70 parse and inflection-point detection was done earlier
     # (just after the frame paths were extracted) so it's available here AND
     # for the Bezier curve fit.
+    # COLUMN_NODES: the column boundary at the top follows the neck contour
+    # so C0..C3 sit on the shared neck/column boundary, then C4..C10 trace
+    # the rest of the column outline.
     COLUMN_NODES = [
-        ( 859.996, 3506.9),   # C0 top (meets neck)
-        p68_sharp,            # C1 top-left sharp corner
-        p68_left,             # C2 outer curve UPPER leftmost bulge
-        p68_waist,            # C3 outer curve waist (max-X)
-        p68_lower,            # C4 outer curve LOWER leftmost bulge (between waist and base)
-        (1244.0,    66.5),    # C5 base bottom-left
-        (1335.2,    67.6992), # C6 base bottom-right
-        (1787.0,    847.102), # C7 foot at soundbox diagonal
-        p70_left,             # C8 inner curve leftmost bulge
+        new_c0,                                  # C0  new top, on neck contour
+        n20_max_y,                               # C1 = neck N2 (topmost arch)
+        n20_min_x,                               # C2 = neck N3 (leftmost)
+        n20_sharp,                               # C3 = neck N4 (sharp corner, identical pt)
+        p68_waist,                               # C4  outer waist (max-X)
+        p68_lower,                               # C5  outer LOWER bulge
+        (1244.0,    66.5),                       # C6  base bottom-left
+        (1335.2,    67.6992),                    # C7  base bottom-right
+        (1787.0,    847.102),                    # C8  foot at soundbox diagonal
+        (p70_left[0] + dx_shift, p70_left[1]),   # C9  inner curve bulge (-6mm)
     ]
     add_corner_labels(COLUMN_NODES, "column_labels", "#00aa00",
-                      overrides={5: (-180, 60)})
+                      overrides={6: (-180, 60)})
 
-    # Small green dots marking each column control node. Use a dark green
-    # outline + lighter fill so dots are visible even on top of green strokes.
-    g_col_dots = dwg.g(id="column_node_dots", fill="#ffffff",
-                       stroke="#006400", stroke_width=6)
-    for (x, y) in COLUMN_NODES:
-        g_col_dots.add(dwg.circle(center=(x, y), r=22))
-    g_inner.add(g_col_dots)
+    # Node dots disabled while inspecting the C3/N4 mesh region.
+    # g_col_dots = dwg.g(id="column_node_dots", fill="#ffffff",
+    #                    stroke="#006400", stroke_width=6)
+    # for (x, y) in COLUMN_NODES:
+    #     g_col_dots.add(dwg.circle(center=(x, y), r=22))
+    # g_inner.add(g_col_dots)
 
-    # Real Bezier control-handle visualization. For each fitted Bezier
-    # segment [p0, c1, c2, p3]: c1 is the forward handle at p0; c2 is the
-    # backward handle at p3. Draw a solid line from node to handle endpoint.
-    g_handles = dwg.g(id="column_handles", stroke="#00aa00",
-                      stroke_width=4, stroke_dasharray="14,8", fill="none")
+    # (debug handles at C3 removed; the curves are clean now)
 
-    # Combine the two sequences with their bezier control points.
-    bezier_segs = []
-    for seq, beziers in ((p70_seq, p70_beziers), (p68_seq, p68_beziers)):
-        for k, (c1, c2, p3) in enumerate(beziers):
-            p0 = seq[k]
-            bezier_segs.append((p0, c1, c2, p3))
 
-    for p0, c1, c2, p3 in bezier_segs:
-        # Forward handle at p0 -> c1
-        g_handles.add(dwg.line(start=p0, end=c1))
-        g_handles.add(dwg.circle(center=c1, r=10, fill="#00aa00", stroke="none"))
-        # Backward handle at p3 -> c2
-        g_handles.add(dwg.line(start=p3, end=c2))
-        g_handles.add(dwg.circle(center=c2, r=10, fill="#00aa00", stroke="none"))
-
-    # Straight segments at the base (C5..C7) — show horizontal/vertical handles
-    # for visual completeness (these are L commands, not C, so the "handle"
-    # is just along the line direction).
-    base_handles = [
-        ((1244.0, 66.5),     (1244.0, 67.6992)),    # C5 up to v-h corner
-        ((1244.0, 67.6992),  (1335.2, 67.6992)),    # v-h corner to C6
-        ((1335.2, 67.6992),  (1337.0, 67.6992)),    # C6 tiny step
-        ((1337.0, 67.6992),  (1339.4, 71.3008)),    # diagonal start
-        ((1339.4, 71.3008),  (1787.0, 847.102)),    # closure diagonal
+    # ===== Neck =====
+    NECK_NODES = [
+        p20_pts[0],   # N0 start (right corner of joint)
+        n20_max_x,    # N1 rightmost edge of neck
+        n20_max_y,    # N2 topmost of arch
+        n20_min_x,    # N3 leftmost (back of neck)
+        n20_sharp,    # N4 sharp 90° corner where neck meets column back
+        p20_pts[-1],  # N5 end (left corner of joint)
     ]
-    for a, b in base_handles:
-        g_handles.add(dwg.line(start=a, end=b, stroke_dasharray="4,4"))
-    g_inner.add(g_handles)
+    add_corner_labels(NECK_NODES, "neck_labels", "#cc0000")
+
+    # g_neck_dots = dwg.g(id="neck_node_dots", fill="#ffffff",
+    #                     stroke="#880000", stroke_width=6)
+    # for (x, y) in NECK_NODES:
+    #     g_neck_dots.add(dwg.circle(center=(x, y), r=22))
+    # g_inner.add(g_neck_dots)
+
 
     dwg.save()
 
