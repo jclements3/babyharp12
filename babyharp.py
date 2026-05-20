@@ -13,15 +13,12 @@ String routing per string (soundboard end -> terminus):
   4. arc around big circle (tuning pin terminus)
 """
 from __future__ import annotations
-import math, re
+import math, re, sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
-import svgwrite
-import sys
 sys.path.insert(0, str(Path(__file__).parent))
-from bezierfit import fit_curve as _fit_curve
-import numpy as np
+import frame_data
 
 # ==================================================================
 # PARAMETERS
@@ -107,7 +104,6 @@ def string_color(note: str) -> str:
 # Existing SVG references — DO NOT EDIT unless the SVG changes
 # ==================================================================
 SVG_PATH       = Path(__file__).parent / "babyharp12.svg"
-FRAME_SRC_PATH = Path(__file__).parent / "babyharp_frame.svg"  # immutable
 
 SMALL_HOLES_INNER = [
     (870.797, 3663.8), (1040.0, 3615.8), (1230.8, 3521.0),
@@ -347,21 +343,14 @@ def main():
     # come from the original EPS conversion and aren't algorithmic).
     # ==============================================================
     tuner_r_inner = (BIG_CIRCLE_DIA_MM/2) * INNER_PER_MM
-    src_svg = FRAME_SRC_PATH.read_text()
 
-    def frame_d(pid: str) -> str:
-        m = re.search(r'd="([^"]+)"\s+style="[^"]*"\s+id="'+pid+r'"', src_svg)
-        return m.group(1) if m else ""
-
-    # Originals: neck arch, column-back curve, column-front curve, column-base,
-    # joint, soundbox-left, soundbox-right.
-    d_neck_arch  = frame_d("path20")
-    d_col_back   = frame_d("path68")  # 859.996,3506.9  -> 1244,66.5
-    d_col_front  = frame_d("path70")  # 1787,847.102    -> 859.996,3506.9
-    d_col_base   = frame_d("path66")  # 1244,66.5       -> 1335.2,67.6992
-    d_joint      = frame_d("path72")  # closed thin quad at neck-soundbox junction
-    d_sb_left    = frame_d("path74")  # 2918,2807.3 -> 1339.4,71.3 -> 1337,67.7 -> 2541.2,67.7
-    d_sb_right   = frame_d("path76")  # 2541.2,67.7 -> 3343.4,2608.1 -> 2918,2807.3
+    # Frame data (polylines + Schneider Bezier fits + short raw d-strings) is
+    # imported from frame_data.py, which is generated offline by
+    # tools/extract_frame_data.py. No runtime dependency on bezierfit.py.
+    d_col_base   = frame_data.PATH66_D  # 1244,66.5 -> 1335.2,67.6992
+    d_joint      = frame_data.PATH72_D  # closed thin quad at neck/soundbox junction
+    d_sb_left    = frame_data.PATH74_D  # 2918,2807.3 -> 1339.4,71.3 -> 1337,67.7 -> 2541.2,67.7
+    d_sb_right   = frame_data.PATH76_D  # 2541.2,67.7 -> 3343.4,2608.1 -> 2918,2807.3
 
     def strip_leading_M(d: str) -> str:
         return re.sub(r'^[Mm]\s*-?\d+\.?\d*\s*,?\s*-?\d+\.?\d*\s*', '', d).strip()
@@ -402,9 +391,9 @@ def main():
                 pts.append((cx, cy))
             else: i += 1
         return pts
-    p68_pts = parse_abs_pts(d_col_back)
-    p70_pts = parse_abs_pts(d_col_front)
-    p20_pts = parse_abs_pts(d_neck_arch)
+    p68_pts = frame_data.P68_PTS
+    p70_pts = frame_data.P70_PTS
+    p20_pts = frame_data.P20_PTS
 
     def extreme_x_inflection(pts):
         interior = pts[1:-1] if len(pts) > 2 else pts
@@ -496,22 +485,14 @@ def main():
             out.append((c1, c2, seq[k+1]))
         return out
 
-    # Use Schneider's adaptive algorithm for the column curves too — much
-    # better fit than a single Bezier between each pair of structural nodes.
-    def schneider_fit(pts, max_error=300.0):
-        arr = np.array([list(p) for p in pts], dtype=float)
-        bezs = _fit_curve(arr, max_error=max_error)
-        out = []
-        for bz in bezs:
-            c1 = (float(bz[1][0]), float(bz[1][1]))
-            c2 = (float(bz[2][0]), float(bz[2][1]))
-            p3 = (float(bz[3][0]), float(bz[3][1]))
-            out.append((c1, c2, p3))
-        seq = [(float(bezs[0][0][0]), float(bezs[0][0][1]))] + [b[2] for b in out]
-        return seq, out
-
-    p68_seq, p68_beziers = schneider_fit(p68_pts, max_error=300.0)
-    p70_seq, p70_beziers = schneider_fit(p70_pts, max_error=300.0)
+    # Schneider Bezier fits are precomputed offline (tools/extract_frame_data.py)
+    # and imported as constants. We copy into local lists so post-fit handle
+    # tweaks below (sharp corners, vertical C0, merged C3->next, etc.) don't
+    # mutate the frame_data globals.
+    p68_seq      = list(frame_data.P68_SEQ)
+    p68_beziers  = list(frame_data.P68_BEZ)
+    p70_seq      = list(frame_data.P70_SEQ)
+    p70_beziers  = list(frame_data.P70_BEZ)
 
     # User adjustment: move C0 (top of column, where path68/path70 meet) and
     # C8 (inner-curve leftmost bulge) LEFT by 6mm. Move their adjacent Bezier
@@ -596,22 +577,9 @@ def main():
     # N4 = sharp corner on path20 at index 546 (same point as path68 sharp).
     N4_NECK_IDX = 546
 
-    # Neck: use Schneider's adaptive curve-fit (Graphics Gems) — produces
-    # multiple Beziers automatically based on max_error tolerance.
-    _pts_arr = np.array([list(p) for p in p20_pts], dtype=float)
-    _schneider_beziers = _fit_curve(_pts_arr, max_error=400.0)
-    # Schneider returns list of arrays of 4 control points each.
-    # Convert to our (c1, c2, p3) tuple format.
-    p20_beziers = []
-    for bez in _schneider_beziers:
-        c1 = (float(bez[1][0]), float(bez[1][1]))
-        c2 = (float(bez[2][0]), float(bez[2][1]))
-        p3 = (float(bez[3][0]), float(bez[3][1]))
-        p20_beziers.append((c1, c2, p3))
-    # The node sequence is the endpoint of each Bezier (plus the start).
-    p20_seq = [(float(_schneider_beziers[0][0][0]),
-                float(_schneider_beziers[0][0][1]))] + \
-              [b[2] for b in p20_beziers]
+    # Neck Schneider fit precomputed in frame_data.py.
+    p20_beziers = list(frame_data.P20_BEZ)
+    p20_seq     = list(frame_data.P20_SEQ)
 
     # Force a SHARP corner at N4. Schneider's smooth fit leaves the in/out
     # tangents at N4 nearly parallel (45°ish on both sides), producing a
@@ -679,9 +647,17 @@ def main():
     n4_bi = min(range(len(p20_beziers)),
                 key=lambda i: (p20_beziers[i][2][0]-n20_sharp[0])**2
                             + (p20_beziers[i][2][1]-n20_sharp[1])**2)
-    # Re-extend the last p70 Bezier so its endpoint = updated new_c0.
+    # Re-extend the last p70 Bezier so its endpoint = updated new_c0, AND
+    # force the column inner curve to APPROACH C0 vertically by placing cp2
+    # directly below the endpoint (same X, lower Y). The original handle
+    # magnitude is preserved so the curve keeps roughly the same scale of
+    # curvature into C0; only the direction is overridden.
     p70_last = p70_beziers[-1]
-    p70_beziers[-1] = (p70_last[0], p70_last[1], new_c0)
+    _old_cp2 = p70_last[1]
+    _old_end = p70_last[2]
+    cp2_mag = math.hypot(_old_cp2[0]-_old_end[0], _old_cp2[1]-_old_end[1])
+    new_cp2 = (new_c0[0], new_c0[1] - cp2_mag)
+    p70_beziers[-1] = (p70_last[0], new_cp2, new_c0)
     p70_seq[-1] = new_c0
 
     # C3 -> next bezier endpoint: collapse the C3->C4 and C4->next pair into
@@ -694,10 +670,22 @@ def main():
     second_p68 = p68_beziers[2]
     _c1_old, _c2_old, _c4_old = first_p68
     c1_next, c2_next, p3_next = second_p68
-    mag_c3_out_extended = math.hypot(c1_next[0]-_c4_old[0],
-                                     c1_next[1]-_c4_old[1])
-    extended_cp1_c3 = (n20_sharp[0] + mag_c3_out_extended * incoming_dir[0],
-                       n20_sharp[1] + mag_c3_out_extended * incoming_dir[1])
+    # C3 exit handle: align with the VISUAL trajectory of the bezier entering
+    # N4/C3 (i.e., the chord from that bezier's cp1 to its endpoint), not with
+    # `incoming_dir` (which is the very-last-point tangent — only valid for the
+    # tiny mag_in distance). This makes the column flow smoothly past C3
+    # without a visible kink.  Keep the length short so the original Schneider-
+    # shaped wide column sweep below dominates and the outer column path
+    # stays essentially unchanged.
+    in_bez = p20_beziers[n4_bez_idx]
+    in_cp1, _, in_end = in_bez
+    chord_v = (in_end[0] - in_cp1[0], in_end[1] - in_cp1[1])
+    chord_mag = math.hypot(*chord_v)
+    c3_exit_dir = (chord_v[0]/chord_mag, chord_v[1]/chord_mag)
+    C3_EXIT_HANDLE_LEN = 1065.0  # inner units; ~70% of the previous 1522 long-sweep length
+    mag_c3_out_extended = C3_EXIT_HANDLE_LEN
+    extended_cp1_c3 = (n20_sharp[0] + mag_c3_out_extended * c3_exit_dir[0],
+                       n20_sharp[1] + mag_c3_out_extended * c3_exit_dir[1])
     merged_c3_to_next = (extended_cp1_c3, c2_next, p3_next)
 
     d_column = " ".join([
@@ -718,35 +706,14 @@ def main():
     ])
     d_joint_z  = d_joint    # path72 is already closed
 
-    # ---- svgwrite document ----
-    dwg = svgwrite.Drawing(
-        SVG_PATH.as_posix(),
-        size=("708.88", "930.78"),
-        viewBox="0 0 708.88 930.78",
-        debug=False,
-    )
-    # Outer transforms mirror the original SVG: scale 2x then Y-flip, then 0.1x scale
-    g_root = dwg.g(transform="matrix(2,0,0,-2,0,930.78)")
-    dwg.add(g_root)
-    g_inner = dwg.g(transform="scale(0.1)")
-    g_root.add(g_inner)
-
-    # FRAME GROUPS (one per harp part), each named
-    g_neck = dwg.g(id="neck",
-                   fill="#cc0000", fill_opacity=0.25,
-                   stroke="#cc0000", stroke_width="7.2",
-                   stroke_linecap="round", stroke_linejoin="round")
-    g_neck.add(dwg.path(d=d_neck, id="neck_outline"))
-    g_inner.add(g_neck)
-
-    # NECK SPACER: the slab of neck material between the joint (right edge of
-    # path20 = the implicit N5->N0 closing line) and the vertical above the
-    # treble-most (G6) eyelet. It traces the EXACT neck beziers on its top
-    # and bottom edges (so it tucks into the neck just like the column tucks
-    # into the bass end), and its left edge is a vertical line at x = G6_eyelet.x.
+    # ===== Compute NECK SPACER outline =====
+    # Slab of neck material between the joint (right edge of path20 = the
+    # implicit N5->N0 closing line) and the vertical above the treble-most
+    # (G6) eyelet. Top and bottom edges use the EXACT neck beziers (de
+    # Casteljau-split at the target X), so it tucks into the neck the same
+    # way the column tucks into the bass end.
     target_x = specs[-1].eyelet[0]
-    # Find (bezier index, t) for the upper and lower x=target_x crossings.
-    crossings = []  # list of (bi, t, x, y)
+    crossings = []
     for bi, (c1, c2, p3) in enumerate(p20_beziers):
         p0 = p20_seq[bi]
         prev_x = p0[0]; prev_t = 0.0
@@ -760,56 +727,27 @@ def main():
                 y_cross = bez_eval(p0, c1, c2, p3, t_cross)[1]
                 crossings.append((bi, t_cross, target_x, y_cross))
             prev_x = x; prev_t = t
+
+    d_spacer = None
     if len(crossings) >= 2:
-        # Upper crossing = larger Y (max-Y in inner coords). Lower = smaller Y.
         up = max(crossings, key=lambda c: c[3])
         lo = min(crossings, key=lambda c: c[3])
-        up_bi, up_t, _, up_y = up
-        lo_bi, lo_t, _, lo_y = lo
-
-        # Split each bezier at its crossing.
+        up_bi, up_t, _, _ = up
+        lo_bi, lo_t, _, _ = lo
         P0u = p20_seq[up_bi]
         c1u, c2u, p3u = p20_beziers[up_bi]
-        first_up, second_up, split_up = bez_split(P0u, c1u, c2u, p3u, up_t)
-        # second_up goes (split_up_pt -> p3u). To trace from split toward N0
-        # (which is p20_seq[0] = start of bezier 0), we need to go in REVERSE
-        # through the FIRST half then through the earlier beziers in reverse.
-        # Since up_bi is bezier 0 here, we just need the first_up reversed.
-
+        first_up, _, split_up = bez_split(P0u, c1u, c2u, p3u, up_t)
         P0l = p20_seq[lo_bi]
         c1l, c2l, p3l = p20_beziers[lo_bi]
-        first_lo, second_lo, split_lo = bez_split(P0l, c1l, c2l, p3l, lo_t)
-        # second_lo goes (split_lo_pt -> p3l = N5). Forward direction works.
-
+        _, second_lo, split_lo = bez_split(P0l, c1l, c2l, p3l, lo_t)
         def rev_bez(P0, P1, P2, P3):
-            # Reverse a cubic bezier: returns (start, c1, c2, p3) for the
-            # reversed segment going P3 -> P0.
             return (P3, P2, P1, P0)
-
-        # Spacer trace (counter-clockwise from lower-left):
-        # 1. M (split_lo_pt) at x=target_x, y=lo_y
-        # 2. L (split_up_pt) — vertical line up
-        # 3. Reverse first_up: from split_up_pt back to P0u (= N0)
-        # 4. L from N0 (p20_seq[0]) to N5 (p20_pts[-1] = p3 of last bezier)
-        # 5. Forward second_lo: from split_lo_pt... wait, we need to go FROM
-        #    N5 BACK to split_lo_pt. second_lo goes split_lo_pt -> N5 forward,
-        #    so we need it REVERSED.
-        # Actually simpler: trace CCW starting from N0.
-        #   M N0
-        #   L N5  (closing line, going down-left)
-        #   reversed(second_lo): N5 -> split_lo_pt
-        #   L split_up_pt (vertical up)
-        #   reversed(first_up): split_up_pt -> N0
-        #   Z
+        _, rev_second_lo_c1, rev_second_lo_c2, rev_second_lo_p3 = \
+            rev_bez(split_lo, second_lo[0], second_lo[1], second_lo[2])
+        _, rev_first_up_c1, rev_first_up_c2, rev_first_up_p3 = \
+            rev_bez(P0u, first_up[0], first_up[1], first_up[2])
         N0_pt = p20_seq[0]
         N5_pt = p20_seq[-1]
-        # Reverse second_lo for tracing N5 -> split_lo_pt
-        rev_second_lo_P0, rev_second_lo_c1, rev_second_lo_c2, rev_second_lo_p3 = \
-            rev_bez(split_lo, second_lo[0], second_lo[1], second_lo[2])
-        # Reverse first_up for tracing split_up_pt -> N0
-        rev_first_up_P0, rev_first_up_c1, rev_first_up_c2, rev_first_up_p3 = \
-            rev_bez(P0u, first_up[0], first_up[1], first_up[2])
-
         d_spacer = " ".join([
             f"M {N0_pt[0]:.2f} {N0_pt[1]:.2f}",
             f"L {N5_pt[0]:.2f} {N5_pt[1]:.2f}",
@@ -818,37 +756,9 @@ def main():
             bez_str((rev_first_up_c1, rev_first_up_c2, rev_first_up_p3)),
             "Z",
         ])
-        g_spacer = dwg.g(id="neck_spacer",
-                         fill="#aa6600", fill_opacity=0.45,
-                         stroke="#aa6600", stroke_width="7.2",
-                         stroke_linecap="round", stroke_linejoin="round")
-        g_spacer.add(dwg.path(d=d_spacer, id="neck_spacer_outline"))
-        g_inner.add(g_spacer)
 
-    g_column = dwg.g(id="column",
-                     fill="#00aa00", fill_opacity=0.25,
-                     stroke="#00aa00", stroke_width="7.2",
-                     stroke_linecap="round", stroke_linejoin="round")
-    g_column.add(dwg.path(d=d_column, id="column_outline"))
-    g_inner.add(g_column)
-
-    g_soundbox = dwg.g(id="soundbox",
-                       fill="#0080ff", fill_opacity=0.25,
-                       stroke="#0080ff", stroke_width="7.2",
-                       stroke_linecap="round", stroke_linejoin="round")
-    g_soundbox.add(dwg.path(d=d_soundbox, id="soundbox_outline"))
-    g_inner.add(g_soundbox)
-
-    g_joint = dwg.g(id="joint",
-                    fill="#8b4513", fill_opacity=0.6,
-                    stroke="#8b4513", stroke_width="7.2",
-                    stroke_linecap="round", stroke_linejoin="round")
-    g_joint.add(dwg.path(d=d_joint_z, id="joint_outline"))
-    g_inner.add(g_joint)
-
-    # STRINGS — one path per note, going eyelet -> pin arc -> tuner arc.
-    g_strings = dwg.g(id="strings", fill="none",
-                      stroke_linecap="round", stroke_linejoin="round")
+    # ===== Compute string paths =====
+    string_paths = []
     for s in specs:
         sr = (s.diameter_mm/2) * INNER_PER_MM
         v = sub(s.pin, s.eyelet)
@@ -865,99 +775,24 @@ def main():
                      2*s.tuner[1] - tuner_entry[1])
         r_pin_c = pin_r_inner + sr
         r_tnr_c = tuner_r_inner + sr
-        d = (f"M {s.eyelet[0]:.2f} {s.eyelet[1]:.2f}"
-             f" L {pin_entry[0]:.2f} {pin_entry[1]:.2f}"
-             f" A {r_pin_c:.2f} {r_pin_c:.2f} 0 0 0 "
-             f"{pin_exit_outer[0]:.2f} {pin_exit_outer[1]:.2f}"
-             f" L {tuner_entry[0]:.2f} {tuner_entry[1]:.2f}"
-             f" A {r_tnr_c:.2f} {r_tnr_c:.2f} 0 0 0 "
-             f"{tuner_end[0]:.2f} {tuner_end[1]:.2f}")
-        g_strings.add(dwg.path(d=d, id=f"string_{s.note}",
-                               stroke=string_color(s.note),
-                               stroke_width=f"{s.diameter_mm*INNER_PER_MM:.2f}"))
-    g_inner.add(g_strings)
+        d_s = (f"M {s.eyelet[0]:.2f} {s.eyelet[1]:.2f}"
+               f" L {pin_entry[0]:.2f} {pin_entry[1]:.2f}"
+               f" A {r_pin_c:.2f} {r_pin_c:.2f} 0 0 0 "
+               f"{pin_exit_outer[0]:.2f} {pin_exit_outer[1]:.2f}"
+               f" L {tuner_entry[0]:.2f} {tuner_entry[1]:.2f}"
+               f" A {r_tnr_c:.2f} {r_tnr_c:.2f} 0 0 0 "
+               f"{tuner_end[0]:.2f} {tuner_end[1]:.2f}")
+        string_paths.append((s, d_s))
 
-    # EYELETS
-    g_eyelets = dwg.g(id="eyelets", fill="none",
-                      stroke="#444444", stroke_width="3")
-    for s in specs:
-        g_eyelets.add(dwg.circle(center=s.eyelet, r=eyelet_r_inner,
-                                 id=f"eyelet_{s.note}"))
-    g_inner.add(g_eyelets)
-
-    # PINS
-    g_pins = dwg.g(id="pins", fill="#ff8800", fill_opacity=0.5,
-                   stroke="#ff8800", stroke_width="3")
-    for s in specs:
-        g_pins.add(dwg.circle(center=s.pin, r=pin_r_inner,
-                              id=f"pin_{s.note}"))
-    g_inner.add(g_pins)
-
-    # TUNERS
-    g_tuners = dwg.g(id="tuners", fill="#9933cc", fill_opacity=0.4,
-                     stroke="#9933cc", stroke_width="3")
-    for s in specs:
-        g_tuners.add(dwg.circle(center=s.tuner, r=tuner_r_inner,
-                                id=f"tuner_{s.note}"))
-    g_inner.add(g_tuners)
-
-    # SOUNDBOX node labels (0..3) — blue, matching soundbox color.
-    # The path has a tiny 5-unit jog (1339.4,71.3 -> 1337,67.7) at the bottom-
-    # left; visually it's one point so we collapse it to one node.
+    # ===== Node lists for labels =====
     SOUNDBOX_NODES = [
         (2918.0,  2807.3),   # S0 top, meets neck/joint
-        (1338.0,    69.5),   # S1 bottom-left (avg of the two near-coincident vertices)
+        (1338.0,    69.5),   # S1 bottom-left (avg of two near-coincident vertices)
         (2541.2,    67.6992),# S2 bottom-right at base
         (3343.4,  2608.1),   # S3 top-right
     ]
-    # Helper to label each corner along its inward angle bisector. If the
-    # bisector ends up pointing away from the polygon centroid, flip it.
-    # `overrides` is {index: (dx, dy)} of explicit per-node offsets.
-    LABEL_DIST = 75
-    def add_corner_labels(nodes, group_id, color, overrides=None):
-        overrides = overrides or {}
-        cx = sum(p[0] for p in nodes) / len(nodes)
-        cy = sum(p[1] for p in nodes) / len(nodes)
-        g = dwg.g(id=group_id, fill=color,
-                  font_family="sans-serif", font_size="80",
-                  font_weight="bold")
-        n = len(nodes)
-        for i, v in enumerate(nodes):
-            if i in overrides:
-                ox, oy = overrides[i]
-                lx, ly = v[0] + ox, v[1] + oy
-            else:
-                prev_v = nodes[(i - 1) % n]
-                next_v = nodes[(i + 1) % n]
-                bis = add(unit(sub(prev_v, v)), unit(sub(next_v, v)))
-                if math.hypot(*bis) < 1e-6:
-                    bis = unit((cx - v[0], cy - v[1]))
-                else:
-                    bis = unit(bis)
-                    to_centroid = (cx - v[0], cy - v[1])
-                    if bis[0]*to_centroid[0] + bis[1]*to_centroid[1] < 0:
-                        bis = (-bis[0], -bis[1])
-                lx = v[0] + bis[0] * LABEL_DIST
-                ly = v[1] + bis[1] * LABEL_DIST
-            g.add(dwg.text(
-                str(i),
-                insert=(0, 0),
-                transform=f"translate({lx:.2f},{ly:.2f}) scale(1,-1)",
-                text_anchor="middle",
-            ))
-        g_inner.add(g)
-
-    add_corner_labels(SOUNDBOX_NODES, "soundbox_labels", "#0080ff")
-
-    # Column nodes ordered CCW visually starting at the top of the column.
-    # The path68/path70 parse and inflection-point detection was done earlier
-    # (just after the frame paths were extracted) so it's available here AND
-    # for the Bezier curve fit.
-    # COLUMN_NODES: the column boundary at the top follows the neck contour
-    # so C0..C3 sit on the shared neck/column boundary, then C4..C10 trace
-    # the rest of the column outline.
     COLUMN_NODES = [
-        new_c0,                                  # C0  new top, on neck contour
+        new_c0,                                  # C0  on neck contour
         n20_max_y,                               # C1 = neck N2 (topmost arch)
         n20_min_x,                               # C2 = neck N3 (leftmost)
         n20_sharp,                               # C3 = neck N4 (sharp corner, identical pt)
@@ -968,20 +803,6 @@ def main():
         (1787.0,    847.102),                    # C8  foot at soundbox diagonal
         (p70_left[0] + dx_shift, p70_left[1]),   # C9  inner curve bulge (-6mm)
     ]
-    add_corner_labels(COLUMN_NODES, "column_labels", "#00aa00",
-                      overrides={6: (-180, 60)})
-
-    # Node dots disabled while inspecting the C3/N4 mesh region.
-    # g_col_dots = dwg.g(id="column_node_dots", fill="#ffffff",
-    #                    stroke="#006400", stroke_width=6)
-    # for (x, y) in COLUMN_NODES:
-    #     g_col_dots.add(dwg.circle(center=(x, y), r=22))
-    # g_inner.add(g_col_dots)
-
-    # (debug handles at C3 removed; the curves are clean now)
-
-
-    # ===== Neck =====
     NECK_NODES = [
         p20_pts[0],   # N0 start (right corner of joint)
         n20_max_x,    # N1 rightmost edge of neck
@@ -990,16 +811,243 @@ def main():
         n20_sharp,    # N4 sharp 90° corner where neck meets column back
         p20_pts[-1],  # N5 end (left corner of joint)
     ]
-    add_corner_labels(NECK_NODES, "neck_labels", "#cc0000")
 
-    # g_neck_dots = dwg.g(id="neck_node_dots", fill="#ffffff",
-    #                     stroke="#880000", stroke_width=6)
-    # for (x, y) in NECK_NODES:
-    #     g_neck_dots.add(dwg.circle(center=(x, y), r=22))
-    # g_inner.add(g_neck_dots)
+    LABEL_DIST = 75
+    def label_positions(nodes, overrides=None):
+        overrides = overrides or {}
+        cx_c = sum(p[0] for p in nodes) / len(nodes)
+        cy_c = sum(p[1] for p in nodes) / len(nodes)
+        n = len(nodes); out = []
+        for i, v in enumerate(nodes):
+            if i in overrides:
+                ox, oy = overrides[i]
+                out.append((v[0] + ox, v[1] + oy)); continue
+            prev_v = nodes[(i - 1) % n]
+            next_v = nodes[(i + 1) % n]
+            bis = add(unit(sub(prev_v, v)), unit(sub(next_v, v)))
+            if math.hypot(*bis) < 1e-6:
+                bis = unit((cx_c - v[0], cy_c - v[1]))
+            else:
+                bis = unit(bis)
+                to_centroid = (cx_c - v[0], cy_c - v[1])
+                if bis[0]*to_centroid[0] + bis[1]*to_centroid[1] < 0:
+                    bis = (-bis[0], -bis[1])
+            out.append((v[0] + bis[0]*LABEL_DIST, v[1] + bis[1]*LABEL_DIST))
+        return out
 
+    # ==================================================================
+    # SVG EMIT — hand-formatted, one logical element per line, no nested
+    # transforms (the inner-coord matrix(2,0,0,-2,0,930.78)·scale(0.1) is
+    # baked into each coordinate so the file is directly readable).
+    # ==================================================================
+    def ux(v): return 0.2 * v                # inner X -> user X
+    def uy(v): return 930.78 - 0.2 * v       # inner Y -> user Y (with flip)
+    SW_USER = 1.44                            # stroke-width: inner 7.2 * 0.2
+    THIN_SW = 0.6                             # eyelet/pin/tuner outline
+    FONT_SIZE = 16                            # inner 80 * 0.2
+    _NUM_RE = re.compile(r'[MmLlHhVvCcSsQqTtAaZz]|-?\d*\.?\d+(?:[eE][+-]?\d+)?')
 
-    dwg.save()
+    def tx_d(d):
+        """Transform an SVG path d-string from inner to user coordinates.
+        Handles M/L/H/V/C/A in both absolute and relative forms. Arc sweep
+        flag is flipped (negative-determinant transform). Per SVG spec, the
+        VERY FIRST coordinate pair of the path is always absolute even when
+        the moveto command is lowercase (subsequent implicit pairs then
+        follow the original case)."""
+        toks = _NUM_RE.findall(d)
+        out = []; i = 0; cur = ''; x = y = 0.0
+        first_pair_pending = True
+        fmt = lambda v: f'{v:.2f}'
+        while i < len(toks):
+            t = toks[i]
+            if t in 'MmLlHhVvCcSsQqTtAaZz':
+                cur = t; out.append(t); i += 1; continue
+            is_abs = cur.isupper() or first_pair_pending
+            if cur in 'Mm':
+                cx, cy = float(t), float(toks[i+1])
+                if is_abs: x, y = cx, cy; out += [fmt(ux(cx)), fmt(uy(cy))]
+                else:      x += cx; y += cy; out += [fmt(0.2*cx), fmt(-0.2*cy)]
+                i += 2; cur = 'L' if cur.isupper() else 'l'
+                first_pair_pending = False
+            elif cur in 'Ll':
+                cx, cy = float(t), float(toks[i+1])
+                if is_abs: x, y = cx, cy; out += [fmt(ux(cx)), fmt(uy(cy))]
+                else:      x += cx; y += cy; out += [fmt(0.2*cx), fmt(-0.2*cy)]
+                i += 2
+            elif cur in 'Hh':
+                cx = float(t)
+                if is_abs: x = cx; out.append(fmt(ux(cx)))
+                else:      x += cx; out.append(fmt(0.2*cx))
+                i += 1
+            elif cur in 'Vv':
+                cy = float(t)
+                if is_abs: y = cy; out.append(fmt(uy(cy)))
+                else:      y += cy; out.append(fmt(-0.2*cy))
+                i += 1
+            elif cur in 'Cc':
+                vals = [float(toks[i+k]) for k in range(6)]
+                if is_abs:
+                    x, y = vals[4], vals[5]
+                    for k in (0, 2, 4): out += [fmt(ux(vals[k])), fmt(uy(vals[k+1]))]
+                else:
+                    x += vals[4]; y += vals[5]
+                    for k in (0, 2, 4): out += [fmt(0.2*vals[k]), fmt(-0.2*vals[k+1])]
+                i += 6
+            elif cur in 'Aa':
+                rx, ry = float(toks[i]), float(toks[i+1])
+                rot, large, sweep = toks[i+2], toks[i+3], toks[i+4]
+                ex, ey = float(toks[i+5]), float(toks[i+6])
+                out += [fmt(0.2*rx), fmt(0.2*ry), rot, large,
+                        '1' if sweep == '0' else '0']
+                if is_abs: x, y = ex, ey; out += [fmt(ux(ex)), fmt(uy(ey))]
+                else:      x += ex; y += ey; out += [fmt(0.2*ex), fmt(-0.2*ey)]
+                i += 7
+            else:
+                i += 1
+        return ' '.join(out)
+
+    out_lines = ['<?xml version="1.0" encoding="utf-8"?>',
+                 '<svg viewBox="0 0 708.88 930.78" xmlns="http://www.w3.org/2000/svg">']
+
+    def grp(id_, **attrs):
+        attr_str = ' '.join(f'{k.replace("_","-")}="{v}"' for k, v in attrs.items())
+        out_lines.append(f'  <g id="{id_}" {attr_str}>')
+    def close(): out_lines.append('  </g>')
+    def path(id_, d, **attrs):
+        attr_str = ' '.join(f'{k.replace("_","-")}="{v}"' for k, v in attrs.items())
+        sep = ' ' if attrs else ''
+        out_lines.append(f'    <path id="{id_}"{sep}{attr_str} d="{tx_d(d)}"/>')
+    def circle(id_, cx_, cy_, r_):
+        out_lines.append(
+            f'    <circle id="{id_}" cx="{ux(cx_):.2f}" cy="{uy(cy_):.2f}" r="{0.2*r_:.2f}"/>')
+    def text(content, lx, ly):
+        out_lines.append(
+            f'    <text x="{ux(lx):.2f}" y="{uy(ly):.2f}">{content}</text>')
+
+    # ----- NECK BACK (right cheek, drawn first = behind everything) -----
+    NECK_STYLE = dict(fill="#cc0000", fill_opacity="0.25", stroke="#cc0000",
+                      stroke_width=str(SW_USER), stroke_linecap="round",
+                      stroke_linejoin="round")
+    grp("neck_back", **NECK_STYLE)
+    path("neck_back_outline", d_neck)
+    close()
+
+    # ----- NECK SPACER -----
+    if d_spacer:
+        grp("neck_spacer", fill="#aa6600", fill_opacity="0.45", stroke="#aa6600",
+            stroke_width=str(SW_USER), stroke_linecap="round", stroke_linejoin="round")
+        path("neck_spacer_outline", d_spacer)
+        close()
+
+    # ----- COLUMN -----
+    grp("column", fill="#00aa00", fill_opacity="0.25", stroke="#00aa00",
+        stroke_width=str(SW_USER), stroke_linecap="round", stroke_linejoin="round")
+    path("column_outline", d_column)
+    close()
+
+    # ----- SOUNDBOX -----
+    grp("soundbox", fill="#0080ff", fill_opacity="0.25", stroke="#0080ff",
+        stroke_width=str(SW_USER), stroke_linecap="round", stroke_linejoin="round")
+    path("soundbox_outline", d_soundbox)
+    close()
+
+    # ----- JOINT -----
+    grp("joint", fill="#8b4513", fill_opacity="0.6", stroke="#8b4513",
+        stroke_width=str(SW_USER), stroke_linecap="round", stroke_linejoin="round")
+    path("joint_outline", d_joint_z)
+    close()
+
+    # ----- STRINGS -----
+    grp("strings", fill="none", stroke_linecap="round", stroke_linejoin="round")
+    for s, d_s in string_paths:
+        sw = s.diameter_mm * INNER_PER_MM * 0.2
+        path(f"string_{s.note}", d_s,
+             stroke=string_color(s.note), stroke_width=f"{sw:.2f}")
+    close()
+
+    # ----- EYELETS / PINS / TUNERS -----
+    grp("eyelets", fill="none", stroke="#444444", stroke_width=str(THIN_SW))
+    for s in specs: circle(f"eyelet_{s.note}", s.eyelet[0], s.eyelet[1], eyelet_r_inner)
+    close()
+
+    grp("pins", fill="#ff8800", fill_opacity="0.5", stroke="#ff8800",
+        stroke_width=str(THIN_SW))
+    for s in specs: circle(f"pin_{s.note}", s.pin[0], s.pin[1], pin_r_inner)
+    close()
+
+    grp("tuners", fill="#9933cc", fill_opacity="0.4", stroke="#9933cc",
+        stroke_width=str(THIN_SW))
+    for s in specs: circle(f"tuner_{s.note}", s.tuner[0], s.tuner[1], tuner_r_inner)
+    close()
+
+    # ----- NECK FRONT (left cheek, drawn after middle pieces = on top) -----
+    grp("neck_front", **NECK_STYLE)
+    path("neck_front_outline", d_neck)
+    close()
+
+    # ----- LABELS (drawn last so they're always on top) -----
+    LABEL_STYLE = dict(font_family="sans-serif", font_size=str(FONT_SIZE),
+                       font_weight="bold", text_anchor="middle",
+                       dominant_baseline="central")
+    for nodes, gid, color, overrides in [
+        (SOUNDBOX_NODES, "soundbox_labels", "#0080ff", None),
+        (COLUMN_NODES,   "column_labels",   "#00aa00", {6: (-180, 60)}),
+        (NECK_NODES,     "neck_labels",     "#cc0000", None),
+    ]:
+        positions = label_positions(nodes, overrides)
+        grp(gid, fill=color, **LABEL_STYLE)
+        for i, (lx, ly) in enumerate(positions):
+            text(str(i), lx, ly)
+        close()
+
+    # ----- DEBUG: C3 / N4 control handles at the shared sharp corner -----
+    # C3 (column-outline view of the shared point):
+    #   IN  = cp2 of the neck bezier ending at C3 (sharp-corner-fix output)
+    #         — points UP from C3, magnitude = mag_in (preserved Schneider value)
+    #   OUT = cp1 of the merged C3->next column bezier
+    #         — points DOWN along incoming_dir, magnitude = C3_EXIT_HANDLE_FACTOR
+    #           x (original Schneider next-segment cp1 length)
+    # N4 (neck-outline view of the same point):
+    #   IN  = SAME handle as C3 IN (literally same cp2 of the same bezier)
+    #   OUT = cp1 of the neck bezier starting at N4 (sharp-corner-fix output)
+    #         — points RIGHT along outgoing_dir toward N5
+    c3_in   = p20_beziers[n4_bez_idx][1]
+    c3_out  = extended_cp1_c3
+    n4_out  = p20_beziers[n4_bez_idx + 1][0]   # cp1 of bez starting at N4
+    C3_COLOR = "#ff00ff"   # magenta — column-outline handles
+    N4_COLOR = "#ff8800"   # orange  — neck-outline handles (IN coincident w/ C3)
+
+    out_lines.append(f'  <g id="c3_handles" stroke="{C3_COLOR}" stroke-width="0.8" fill="{C3_COLOR}">')
+    out_lines.append(
+        f'    <line id="c3_handle_in_line" x1="{ux(n20_sharp[0]):.2f}" y1="{uy(n20_sharp[1]):.2f}" '
+        f'x2="{ux(c3_in[0]):.2f}" y2="{uy(c3_in[1]):.2f}"/>')
+    out_lines.append(
+        f'    <line id="c3_handle_out_line" x1="{ux(n20_sharp[0]):.2f}" y1="{uy(n20_sharp[1]):.2f}" '
+        f'x2="{ux(c3_out[0]):.2f}" y2="{uy(c3_out[1]):.2f}"/>')
+    out_lines.append(
+        f'    <circle id="c3_handle_in_dot" cx="{ux(c3_in[0]):.2f}" cy="{uy(c3_in[1]):.2f}" r="2.5"/>')
+    out_lines.append(
+        f'    <circle id="c3_handle_out_dot" cx="{ux(c3_out[0]):.2f}" cy="{uy(c3_out[1]):.2f}" r="2.5"/>')
+    out_lines.append(
+        f'    <circle id="c3_node" cx="{ux(n20_sharp[0]):.2f}" cy="{uy(n20_sharp[1]):.2f}" '
+        f'r="4" fill="none" stroke="{C3_COLOR}" stroke-width="0.8"/>')
+    out_lines.append('  </g>')
+
+    out_lines.append(f'  <g id="n4_handles" stroke="{N4_COLOR}" stroke-width="0.8" fill="{N4_COLOR}">')
+    out_lines.append(
+        f'    <line id="n4_handle_in_line" x1="{ux(n20_sharp[0]):.2f}" y1="{uy(n20_sharp[1]):.2f}" '
+        f'x2="{ux(c3_in[0]):.2f}" y2="{uy(c3_in[1]):.2f}"/>')
+    out_lines.append(
+        f'    <line id="n4_handle_out_line" x1="{ux(n20_sharp[0]):.2f}" y1="{uy(n20_sharp[1]):.2f}" '
+        f'x2="{ux(n4_out[0]):.2f}" y2="{uy(n4_out[1]):.2f}"/>')
+    out_lines.append(
+        f'    <circle id="n4_handle_in_dot" cx="{ux(c3_in[0]):.2f}" cy="{uy(c3_in[1]):.2f}" r="2.5"/>')
+    out_lines.append(
+        f'    <circle id="n4_handle_out_dot" cx="{ux(n4_out[0]):.2f}" cy="{uy(n4_out[1]):.2f}" r="2.5"/>')
+    out_lines.append('  </g>')
+
+    out_lines.append('</svg>')
+    SVG_PATH.write_text('\n'.join(out_lines) + '\n')
 
 if __name__ == "__main__":
     main()
