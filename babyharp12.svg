@@ -43,36 +43,40 @@
     <circle id="eyelet_F6" cx="544.33" cy="437.37" r="1.90"/>
     <circle id="eyelet_G6" cx="560.99" cy="408.50" r="1.90"/>
   </g>
-  <g id="pins" fill="#ff8800" fill-opacity="0.5" stroke="#ff8800" stroke-width="0.6">
-    <circle id="pin_C5" cx="180.30" cy="195.78" r="2.85"/>
+  <g id="pins_right" fill="#0088ff" fill-opacity="0.5" stroke="#0088ff" stroke-width="0.6">
     <circle id="pin_D5" cx="212.35" cy="206.04" r="2.85"/>
-    <circle id="pin_E5" cx="247.81" cy="225.98" r="2.85"/>
     <circle id="pin_F5" cx="288.36" cy="259.67" r="2.85"/>
-    <circle id="pin_G5" cx="329.17" cy="294.00" r="2.85"/>
     <circle id="pin_A5" cx="363.22" cy="309.95" r="2.85"/>
-    <circle id="pin_B5" cx="393.45" cy="315.67" r="2.85"/>
     <circle id="pin_C6" cx="421.33" cy="315.04" r="2.85"/>
-    <circle id="pin_D6" cx="447.34" cy="309.75" r="2.85"/>
     <circle id="pin_E6" cx="471.53" cy="300.07" r="2.85"/>
-    <circle id="pin_F6" cx="494.22" cy="286.83" r="2.85"/>
     <circle id="pin_G6" cx="515.34" cy="270.34" r="2.85"/>
   </g>
-  <g id="tuners" fill="#9933cc" fill-opacity="0.4" stroke="#9933cc" stroke-width="0.6">
-    <circle id="tuner_C5" cx="190.20" cy="139.56" r="6.66"/>
+  <g id="tuners_right" fill="#229922" fill-opacity="0.4" stroke="#229922" stroke-width="0.6">
     <circle id="tuner_D5" cx="221.79" cy="152.37" r="6.66"/>
-    <circle id="tuner_E5" cx="256.81" cy="174.87" r="6.66"/>
     <circle id="tuner_F5" cx="296.91" cy="211.12" r="6.66"/>
-    <circle id="tuner_G5" cx="337.27" cy="248.00" r="6.66"/>
     <circle id="tuner_A5" cx="370.87" cy="266.51" r="6.66"/>
-    <circle id="tuner_B5" cx="400.65" cy="274.78" r="6.66"/>
     <circle id="tuner_C6" cx="428.08" cy="276.70" r="6.66"/>
-    <circle id="tuner_D6" cx="453.64" cy="273.97" r="6.66"/>
     <circle id="tuner_E6" cx="477.38" cy="266.85" r="6.66"/>
-    <circle id="tuner_F6" cx="499.62" cy="256.17" r="6.66"/>
     <circle id="tuner_G6" cx="520.29" cy="242.23" r="6.66"/>
   </g>
   <g id="neck_front" fill="#cc0000" fill-opacity="0.25" stroke="#cc0000" stroke-width="1.44" stroke-linecap="round" stroke-linejoin="round">
     <path id="neck_front_outline" d="M 670.84 403.04 C 706.02 302.54 680.95 183.94 546.28 201.20 C 504.84 206.51 470.22 233.88 429.04 239.60 C 402.09 243.34 375.49 238.51 352.12 224.36 C 250.47 162.83 256.33 32.24 65.80 17.00 C 53.28 16.00 27.61 11.49 19.36 24.68 C 8.95 41.34 35.42 99.91 37.96 120.20 C 41.93 151.94 42.43 186.41 36.52 218.00 C 36.32 219.08 34.84 226.61 34.84 227.96 C 37.46 227.96 58.31 223.45 61.00 223.16 C 101.57 218.81 145.86 219.45 184.72 233.24 C 248.58 255.90 287.53 321.37 355.36 336.44 C 460.02 359.70 477.14 304.41 541.84 292.28 C 587.62 283.70 603.77 327.54 585.88 363.32 Z"/>
+  </g>
+  <g id="pins_left" fill="#ff8800" fill-opacity="0.5" stroke="#ff8800" stroke-width="0.6">
+    <circle id="pin_C5" cx="180.30" cy="195.78" r="2.85"/>
+    <circle id="pin_E5" cx="247.81" cy="225.98" r="2.85"/>
+    <circle id="pin_G5" cx="329.17" cy="294.00" r="2.85"/>
+    <circle id="pin_B5" cx="393.45" cy="315.67" r="2.85"/>
+    <circle id="pin_D6" cx="447.34" cy="309.75" r="2.85"/>
+    <circle id="pin_F6" cx="494.22" cy="286.83" r="2.85"/>
+  </g>
+  <g id="tuners_left" fill="#9933cc" fill-opacity="0.4" stroke="#9933cc" stroke-width="0.6">
+    <circle id="tuner_C5" cx="190.20" cy="139.56" r="6.66"/>
+    <circle id="tuner_E5" cx="256.81" cy="174.87" r="6.66"/>
+    <circle id="tuner_G5" cx="337.27" cy="248.00" r="6.66"/>
+    <circle id="tuner_B5" cx="400.65" cy="274.78" r="6.66"/>
+    <circle id="tuner_D6" cx="453.64" cy="273.97" r="6.66"/>
+    <circle id="tuner_F6" cx="499.62" cy="256.17" r="6.66"/>
   </g>
   <g id="soundbox_labels" fill="#0080ff" font-family="sans-serif" font-size="16" font-weight="bold" text-anchor="middle" dominant-baseline="central">
     <text x="588.10" y="383.63">0</text>

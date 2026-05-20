@@ -1009,19 +1009,39 @@ def main():
     for s in specs: circle(f"eyelet_{s.note}", s.eyelet_hole[0], s.eyelet_hole[1], eyelet_r_inner)
     close()
 
-    grp("pins", fill="#ff8800", fill_opacity="0.5", stroke="#ff8800",
+    # Pins/tuners alternate between the two neck cheeks: ODD-numbered
+    # (strings 1, 3, 5, …) go on the LEFT (front) cheek and are drawn AFTER
+    # neck_front so they sit on top. EVEN-numbered (strings 2, 4, 6, …) go on
+    # the RIGHT (back) cheek and are drawn BEFORE neck_front, which leaves
+    # them slightly muted under the translucent front cheek — matching what
+    # a side-on viewer would actually see.
+    odd_specs  = [s for i, s in enumerate(specs) if (i + 1) % 2 == 1]
+    even_specs = [s for i, s in enumerate(specs) if (i + 1) % 2 == 0]
+
+    # Even (right cheek): cool colors. Odd (left cheek): warm colors.
+    grp("pins_right", fill="#0088ff", fill_opacity="0.5", stroke="#0088ff",
         stroke_width=str(THIN_SW))
-    for s in specs: circle(f"pin_{s.note}", s.pin[0], s.pin[1], pin_r_inner)
+    for s in even_specs: circle(f"pin_{s.note}", s.pin[0], s.pin[1], pin_r_inner)
     close()
 
-    grp("tuners", fill="#9933cc", fill_opacity="0.4", stroke="#9933cc",
+    grp("tuners_right", fill="#229922", fill_opacity="0.4", stroke="#229922",
         stroke_width=str(THIN_SW))
-    for s in specs: circle(f"tuner_{s.note}", s.tuner[0], s.tuner[1], tuner_r_inner)
+    for s in even_specs: circle(f"tuner_{s.note}", s.tuner[0], s.tuner[1], tuner_r_inner)
     close()
 
     # ----- NECK FRONT (left cheek, drawn after middle pieces = on top) -----
     grp("neck_front", **NECK_STYLE)
     path("neck_front_outline", d_neck)
+    close()
+
+    grp("pins_left", fill="#ff8800", fill_opacity="0.5", stroke="#ff8800",
+        stroke_width=str(THIN_SW))
+    for s in odd_specs: circle(f"pin_{s.note}", s.pin[0], s.pin[1], pin_r_inner)
+    close()
+
+    grp("tuners_left", fill="#9933cc", fill_opacity="0.4", stroke="#9933cc",
+        stroke_width=str(THIN_SW))
+    for s in odd_specs: circle(f"tuner_{s.note}", s.tuner[0], s.tuner[1], tuner_r_inner)
     close()
 
     # ----- LABELS (drawn last so they're always on top) -----
