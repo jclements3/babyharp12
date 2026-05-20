@@ -372,9 +372,131 @@ def main():
 
     # Closed COMBINED paths for each region.
     d_neck     = f"{d_neck_arch} Z"
-    d_column   = (f"{d_col_front} {chain(d_col_back)} {chain(d_col_base)} "
-                  f"L 1337,67.6992 L 1339.4,71.3008 L 1787,847.102 Z")
     d_soundbox = f"{d_sb_left} L {strip_leading_M(d_sb_right)} Z"
+
+    # ---- Parse the column polylines to find their control nodes -----------
+    def parse_abs_pts(d):
+        toks = re.findall(r'[MmLlHhVv]|-?\d+\.?\d*', d.strip())
+        i = 0; cx = cy = 0.0; pts = []; last = None
+        while i < len(toks):
+            t = toks[i]
+            if t.isalpha(): cmd = t; i += 1
+            else: cmd = 'L' if last=='M' else ('l' if last=='m' else last)
+            last = cmd
+            if cmd in ('M','L'):
+                cx, cy = float(toks[i]), float(toks[i+1]); i += 2; pts.append((cx, cy))
+            elif cmd in ('m','l'):
+                dx, dy = float(toks[i]), float(toks[i+1]); i += 2
+                if cmd=='m' and not pts: cx,cy = dx,dy
+                else: cx,cy = cx+dx, cy+dy
+                pts.append((cx, cy))
+            elif cmd in ('H','V','h','v'):
+                v = float(toks[i]); i += 1
+                if cmd=='H': cx = v
+                elif cmd=='h': cx += v
+                elif cmd=='V': cy = v
+                elif cmd=='v': cy += v
+                pts.append((cx, cy))
+            else: i += 1
+        return pts
+    p68_pts = parse_abs_pts(d_col_back)
+    p70_pts = parse_abs_pts(d_col_front)
+
+    def extreme_x_inflection(pts):
+        interior = pts[1:-1] if len(pts) > 2 else pts
+        return min(interior, key=lambda p: p[0])
+    def extreme_x_max(pts):
+        interior = pts[1:-1] if len(pts) > 2 else pts
+        return max(interior, key=lambda p: p[0])
+    def find_sharp_corner(pts, threshold_deg=30):
+        worst = None; worst_ang = threshold_deg
+        for j in range(1, len(pts)-1):
+            v1 = (pts[j][0]-pts[j-1][0], pts[j][1]-pts[j-1][1])
+            v2 = (pts[j+1][0]-pts[j][0], pts[j+1][1]-pts[j][1])
+            m1 = math.hypot(*v1); m2 = math.hypot(*v2)
+            if m1 < 1e-3 or m2 < 1e-3: continue
+            dot = max(-1, min(1, (v1[0]*v2[0] + v1[1]*v2[1]) / (m1*m2)))
+            ang = math.degrees(math.acos(dot))
+            if ang > worst_ang:
+                worst_ang = ang; worst = pts[j]
+        return worst
+
+    p68_sharp = find_sharp_corner(p68_pts)
+    p68_left  = extreme_x_inflection(p68_pts)
+    p68_waist = extreme_x_max(p68_pts)
+    p70_left  = extreme_x_inflection(p70_pts)
+    i_waist_idx = max(range(len(p68_pts)), key=lambda j: p68_pts[j][0])
+    p68_lower = min(p68_pts[i_waist_idx+1:-1], key=lambda p: p[0])
+
+    # ---- Curve-fit the column polylines into Bezier segments ---------------
+    # The original SVG has path68 and path70 as polylines of hundreds of tiny
+    # straight segments. Replace them with cubic Beziers fitted (least-squares)
+    # to the polyline points between each pair of consecutive column nodes.
+    def fit_bezier(pts, p0, p3):
+        if len(pts) < 3:
+            return (p0[0]+(p3[0]-p0[0])/3, p0[1]+(p3[1]-p0[1])/3), \
+                   (p0[0]+2*(p3[0]-p0[0])/3, p0[1]+2*(p3[1]-p0[1])/3)
+        cumlen = [0.0]
+        for k in range(1, len(pts)):
+            cumlen.append(cumlen[-1] + math.hypot(
+                pts[k][0]-pts[k-1][0], pts[k][1]-pts[k-1][1]))
+        total = cumlen[-1] or 1.0
+        ts = [c/total for c in cumlen]
+        s11=s12=s22=bx1=bx2=by1=by2=0.0
+        for t, p in zip(ts, pts):
+            w1 = 3*(1-t)**2 * t
+            w2 = 3*(1-t)   * t**2
+            kx = (1-t)**3 * p0[0] + t**3 * p3[0]
+            ky = (1-t)**3 * p0[1] + t**3 * p3[1]
+            rx = p[0]-kx; ry = p[1]-ky
+            s11 += w1*w1; s12 += w1*w2; s22 += w2*w2
+            bx1 += w1*rx; bx2 += w2*rx
+            by1 += w1*ry; by2 += w2*ry
+        det = s11*s22 - s12*s12
+        if abs(det) < 1e-9:
+            return p0, p3
+        cx1 = ( s22*bx1 - s12*bx2)/det
+        cx2 = (-s12*bx1 + s11*bx2)/det
+        cy1 = ( s22*by1 - s12*by2)/det
+        cy2 = (-s12*by1 + s11*by2)/det
+        return (cx1, cy1), (cx2, cy2)
+
+    def find_idx(target, pts, tol=0.5):
+        for i, p in enumerate(pts):
+            if abs(p[0]-target[0]) < tol and abs(p[1]-target[1]) < tol:
+                return i
+        return None
+
+    # Stash the fit handles so we can label/visualize them later.
+    # path68 segment node order, top -> base-left:
+    p68_seq = [(859.996, 3506.9), p68_sharp, p68_left, p68_waist, p68_lower,
+               (1244.0, 66.5)]
+    p70_seq = [(1787.0, 847.102), p70_left, (859.996, 3506.9)]
+
+    def beziers_along(seq, all_pts):
+        idxs = [find_idx(n, all_pts) for n in seq]
+        out = []
+        for k in range(len(seq)-1):
+            i0, i1 = idxs[k], idxs[k+1]
+            slice_pts = all_pts[i0:i1+1]
+            c1, c2 = fit_bezier(slice_pts, seq[k], seq[k+1])
+            out.append((c1, c2, seq[k+1]))
+        return out
+
+    p68_beziers = beziers_along(p68_seq, p68_pts)
+    p70_beziers = beziers_along(p70_seq, p70_pts)
+
+    def bez_str(b):
+        c1, c2, p = b
+        return (f"C {c1[0]:.2f} {c1[1]:.2f} {c2[0]:.2f} {c2[1]:.2f} "
+                f"{p[0]:.2f} {p[1]:.2f}")
+    d_column = " ".join([
+        f"M {p70_seq[0][0]:.2f} {p70_seq[0][1]:.2f}",
+        *[bez_str(b) for b in p70_beziers],
+        *[bez_str(b) for b in p68_beziers],
+        "L 1244 67.6992 L 1335.2 67.6992",
+        "L 1337 67.6992 L 1339.4 71.3008 L 1787 847.102 Z",
+    ])
     d_joint_z  = d_joint    # path72 is already closed
 
     # ---- svgwrite document ----
@@ -382,7 +504,7 @@ def main():
         SVG_PATH.as_posix(),
         size=("708.88", "930.78"),
         viewBox="0 0 708.88 930.78",
-        debug=False,                # turn off strict d-attribute validation
+        debug=False,
     )
     # Outer transforms mirror the original SVG: scale 2x then Y-flip, then 0.1x scale
     g_root = dwg.g(transform="matrix(2,0,0,-2,0,930.78)")
@@ -472,6 +594,115 @@ def main():
         g_tuners.add(dwg.circle(center=s.tuner, r=tuner_r_inner,
                                 id=f"tuner_{s.note}"))
     g_inner.add(g_tuners)
+
+    # SOUNDBOX node labels (0..3) — blue, matching soundbox color.
+    # The path has a tiny 5-unit jog (1339.4,71.3 -> 1337,67.7) at the bottom-
+    # left; visually it's one point so we collapse it to one node.
+    SOUNDBOX_NODES = [
+        (2918.0,  2807.3),   # S0 top, meets neck/joint
+        (1338.0,    69.5),   # S1 bottom-left (avg of the two near-coincident vertices)
+        (2541.2,    67.6992),# S2 bottom-right at base
+        (3343.4,  2608.1),   # S3 top-right
+    ]
+    # Helper to label each corner along its inward angle bisector. If the
+    # bisector ends up pointing away from the polygon centroid, flip it.
+    # `overrides` is {index: (dx, dy)} of explicit per-node offsets.
+    LABEL_DIST = 75
+    def add_corner_labels(nodes, group_id, color, overrides=None):
+        overrides = overrides or {}
+        cx = sum(p[0] for p in nodes) / len(nodes)
+        cy = sum(p[1] for p in nodes) / len(nodes)
+        g = dwg.g(id=group_id, fill=color,
+                  font_family="sans-serif", font_size="80",
+                  font_weight="bold")
+        n = len(nodes)
+        for i, v in enumerate(nodes):
+            if i in overrides:
+                ox, oy = overrides[i]
+                lx, ly = v[0] + ox, v[1] + oy
+            else:
+                prev_v = nodes[(i - 1) % n]
+                next_v = nodes[(i + 1) % n]
+                bis = add(unit(sub(prev_v, v)), unit(sub(next_v, v)))
+                if math.hypot(*bis) < 1e-6:
+                    bis = unit((cx - v[0], cy - v[1]))
+                else:
+                    bis = unit(bis)
+                    to_centroid = (cx - v[0], cy - v[1])
+                    if bis[0]*to_centroid[0] + bis[1]*to_centroid[1] < 0:
+                        bis = (-bis[0], -bis[1])
+                lx = v[0] + bis[0] * LABEL_DIST
+                ly = v[1] + bis[1] * LABEL_DIST
+            g.add(dwg.text(
+                str(i),
+                insert=(0, 0),
+                transform=f"translate({lx:.2f},{ly:.2f}) scale(1,-1)",
+                text_anchor="middle",
+            ))
+        g_inner.add(g)
+
+    add_corner_labels(SOUNDBOX_NODES, "soundbox_labels", "#0080ff")
+
+    # Column nodes ordered CCW visually starting at the top of the column.
+    # The path68/path70 parse and inflection-point detection was done earlier
+    # (just after the frame paths were extracted) so it's available here AND
+    # for the Bezier curve fit.
+    COLUMN_NODES = [
+        ( 859.996, 3506.9),   # C0 top (meets neck)
+        p68_sharp,            # C1 top-left sharp corner
+        p68_left,             # C2 outer curve UPPER leftmost bulge
+        p68_waist,            # C3 outer curve waist (max-X)
+        p68_lower,            # C4 outer curve LOWER leftmost bulge (between waist and base)
+        (1244.0,    66.5),    # C5 base bottom-left
+        (1335.2,    67.6992), # C6 base bottom-right
+        (1787.0,    847.102), # C7 foot at soundbox diagonal
+        p70_left,             # C8 inner curve leftmost bulge
+    ]
+    add_corner_labels(COLUMN_NODES, "column_labels", "#00aa00",
+                      overrides={5: (-180, 60)})
+
+    # Small green dots marking each column control node. Use a dark green
+    # outline + lighter fill so dots are visible even on top of green strokes.
+    g_col_dots = dwg.g(id="column_node_dots", fill="#ffffff",
+                       stroke="#006400", stroke_width=6)
+    for (x, y) in COLUMN_NODES:
+        g_col_dots.add(dwg.circle(center=(x, y), r=22))
+    g_inner.add(g_col_dots)
+
+    # Real Bezier control-handle visualization. For each fitted Bezier
+    # segment [p0, c1, c2, p3]: c1 is the forward handle at p0; c2 is the
+    # backward handle at p3. Draw a solid line from node to handle endpoint.
+    g_handles = dwg.g(id="column_handles", stroke="#00aa00",
+                      stroke_width=4, stroke_dasharray="14,8", fill="none")
+
+    # Combine the two sequences with their bezier control points.
+    bezier_segs = []
+    for seq, beziers in ((p70_seq, p70_beziers), (p68_seq, p68_beziers)):
+        for k, (c1, c2, p3) in enumerate(beziers):
+            p0 = seq[k]
+            bezier_segs.append((p0, c1, c2, p3))
+
+    for p0, c1, c2, p3 in bezier_segs:
+        # Forward handle at p0 -> c1
+        g_handles.add(dwg.line(start=p0, end=c1))
+        g_handles.add(dwg.circle(center=c1, r=10, fill="#00aa00", stroke="none"))
+        # Backward handle at p3 -> c2
+        g_handles.add(dwg.line(start=p3, end=c2))
+        g_handles.add(dwg.circle(center=c2, r=10, fill="#00aa00", stroke="none"))
+
+    # Straight segments at the base (C5..C7) — show horizontal/vertical handles
+    # for visual completeness (these are L commands, not C, so the "handle"
+    # is just along the line direction).
+    base_handles = [
+        ((1244.0, 66.5),     (1244.0, 67.6992)),    # C5 up to v-h corner
+        ((1244.0, 67.6992),  (1335.2, 67.6992)),    # v-h corner to C6
+        ((1335.2, 67.6992),  (1337.0, 67.6992)),    # C6 tiny step
+        ((1337.0, 67.6992),  (1339.4, 71.3008)),    # diagonal start
+        ((1339.4, 71.3008),  (1787.0, 847.102)),    # closure diagonal
+    ]
+    for a, b in base_handles:
+        g_handles.add(dwg.line(start=a, end=b, stroke_dasharray="4,4"))
+    g_inner.add(g_handles)
 
     dwg.save()
 
