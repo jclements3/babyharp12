@@ -218,7 +218,8 @@ class StringSpec:
     note: str                            # e.g. "C5"
     freq_hz: float
     tension_n: float
-    eyelet: tuple = (0.0, 0.0)           # soundbox attach (inner coords)
+    eyelet: tuple = (0.0, 0.0)           # string CENTERLINE start (where the path begins)
+    eyelet_hole: tuple = (0.0, 0.0)      # eyelet CIRCLE center (shifted below s.eyelet)
     pin: tuple = (0.0, 0.0)              # small-circle (string-guide) center
     tuner: Optional[tuple] = None        # big-circle (tuning peg) — TBD
     length_mm: float = 0.0
@@ -250,42 +251,80 @@ def main():
         for i, n in enumerate(NOTES)
     ]
 
-    # ---- Eyelets equally spaced between column foot (C7) and soundbox top
-    # corner (S0). With N strings, total distance = (N+1)*X. So eyelet i
-    # sits at (i+1)*X along the soundboard from C7. The end gaps (C7 to
-    # eyelet 0 and eyelet N-1 to S0) equal X.
+    # ---- Eyelets along the soundboard between column foot (C8) and
+    # soundbox top corner (S0). The center-to-center spacing of adjacent
+    # strings (along SB_DIR) is chosen so the PERPENDICULAR air gap between
+    # adjacent string ODs is exactly STRING_AIR_GAP_MM:
+    #     perp_gap = SB_step * sin(rake_angle) - avg_diameter
+    #     => SB_step = (STRING_AIR_GAP_MM + avg_d) / sin(rake)
+    # Because diameter depends on vibrating length (which depends on eyelet
+    # position) and vice versa, we iterate until diameters stabilize. The
+    # BASS-side boundary gap (C8 → C5 eyelet, along the soundboard) is fixed
+    # by BASS_BOUNDARY_MM; the treble-side gap floats and absorbs whatever
+    # leftover length remains on the soundboard up to S0.
+    BASS_BOUNDARY_MM = 16.0
     SOUNDBOX_TOP_CORNER = (2918.0, 2807.3)         # = S0
     total_inner = math.hypot(SOUNDBOX_TOP_CORNER[0] - INNER_COLUMN_FOOT[0],
                              SOUNDBOX_TOP_CORNER[1] - INNER_COLUMN_FOOT[1])
+    sin_rake = math.sin(math.radians(RAKE_ANGLE_DEG))
+    bass_boundary_inner = BASS_BOUNDARY_MM * INNER_PER_MM
+
+    # Initial diameter guess: place eyelets equally spaced for the first pass.
     step_inner = total_inner / (NUM_STRINGS + 1)
     for i in range(NUM_STRINGS):
         specs[i].eyelet = add(INNER_COLUMN_FOOT,
                               mul(SB_DIR, (i + 1) * step_inner))
-
-    # ---- Pin (string tip) END point: project original small-hole onto the
-    #      parallel string line from the eyelet.
     for i, pin_orig in enumerate(SMALL_HOLES_INNER):
         v = sub(pin_orig, specs[i].eyelet)
         t = v[0]*str_dir[0] + v[1]*str_dir[1]
-        tip = add(specs[i].eyelet, mul(str_dir, t))
-        specs[i].pin = tip
-
-    # ---- Vibrating length + required diameter (no iteration needed since
-    # eyelet positions are fixed). ----
+        specs[i].pin = add(specs[i].eyelet, mul(str_dir, t))
     for s in specs:
         s.length_mm = vibrating_length_mm(s.eyelet, s.pin)
         s.diameter_mm = diameter_for_freq_mm(s.length_mm, s.freq_hz,
                                              s.tension_n,
                                              STRING_DENSITY_KG_M3)
 
-    # ---- Final eyelet center adjustment: shift eyelet center DOWN the
-    # soundboard by (eyelet_r - string_r) so the string sits against the
-    # upper inner edge of the eyelet hole under tension. ----
+    # Iterate variable spacing until diameters converge.
+    for _iter in range(15):
+        sb_steps = [
+            (STRING_AIR_GAP_MM + 0.5*(specs[i].diameter_mm
+                                      + specs[i+1].diameter_mm))
+            * INNER_PER_MM / sin_rake
+            for i in range(NUM_STRINGS - 1)
+        ]
+        # Anchor C5 at BASS_BOUNDARY_MM from C8 along the soundboard.
+        specs[0].eyelet = add(INNER_COLUMN_FOOT,
+                              mul(SB_DIR, bass_boundary_inner))
+        for i in range(1, NUM_STRINGS):
+            specs[i].eyelet = add(specs[i-1].eyelet,
+                                  mul(SB_DIR, sb_steps[i-1]))
+        # Recompute pins (project original small-hole onto each string line)
+        for i, pin_orig in enumerate(SMALL_HOLES_INNER):
+            v = sub(pin_orig, specs[i].eyelet)
+            t = v[0]*str_dir[0] + v[1]*str_dir[1]
+            specs[i].pin = add(specs[i].eyelet, mul(str_dir, t))
+        # Recompute lengths + diameters
+        max_dd = 0.0
+        for s in specs:
+            prev_d = s.diameter_mm
+            s.length_mm = vibrating_length_mm(s.eyelet, s.pin)
+            s.diameter_mm = diameter_for_freq_mm(s.length_mm, s.freq_hz,
+                                                 s.tension_n,
+                                                 STRING_DENSITY_KG_M3)
+            max_dd = max(max_dd, abs(s.diameter_mm - prev_d))
+        if max_dd < 1e-5:
+            break
+
+    # ---- Eyelet HOLE position (for drawing the circle) sits BELOW the
+    # string centerline by (eyelet_r - string_r), so the string OD touches
+    # the upper inner rim of the hole when in tension. s.eyelet remains the
+    # string-centerline position (where the string PATH starts).
     eyelet_r_inner = (EYELET_ID_MM/2) * INNER_PER_MM
     for s in specs:
         string_r_inner = (s.diameter_mm/2) * INNER_PER_MM
         off = eyelet_r_inner - string_r_inner
-        s.eyelet = (s.eyelet[0] - SB_DIR[0]*off, s.eyelet[1] - SB_DIR[1]*off)
+        s.eyelet_hole = (s.eyelet[0] - SB_DIR[0]*off,
+                         s.eyelet[1] - SB_DIR[1]*off)
 
     # ---- Final pin center: shift from the string tip perpendicular to the
     # string by (pin_r + string_r) so the pin OD is tangent to the string OD.
@@ -967,7 +1006,7 @@ def main():
 
     # ----- EYELETS / PINS / TUNERS -----
     grp("eyelets", fill="none", stroke="#444444", stroke_width=str(THIN_SW))
-    for s in specs: circle(f"eyelet_{s.note}", s.eyelet[0], s.eyelet[1], eyelet_r_inner)
+    for s in specs: circle(f"eyelet_{s.note}", s.eyelet_hole[0], s.eyelet_hole[1], eyelet_r_inner)
     close()
 
     grp("pins", fill="#ff8800", fill_opacity="0.5", stroke="#ff8800",
