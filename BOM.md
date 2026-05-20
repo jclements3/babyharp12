@@ -115,13 +115,37 @@ back as designed.
   bridge-pin shafts (~4 mm) and the Guyker tuner string-post / lock area
   (~8–12 mm tall). With 18 mm interior there's comfortable clearance.
 
-### Soundbox / soundboard
+### Soundboard tonewood
 
-- **Soundboard** — separate tonewood (TBD). Slot at the bass end into the
-  column foot, at the treble end into the soundbox.
-- **Soundbox** assembly: cheeks, back, internal bracing (TBD).
+**Sitka spruce, quartersawn, 3 mm (≈1/8") thickness.**
 
-Fasteners (screws, dowels) and adhesives (titebond, epoxy): TBD.
+| property | value | rationale |
+|---|---|---|
+| species | Sitka spruce (*Picea sitchensis*) | high stiffness-to-weight ratio; standard for guitar/harp soundboards; broadly available |
+| cut | quartersawn | annual rings perpendicular to the face → max stiffness along the string axis, minimal cupping |
+| thickness | ~3.0 mm | typical small-harp range (2.5–3.5 mm); thin enough to be responsive at the low string tensions (8–100 N), thick enough to resist warping under the 12 strings' pull |
+| grade | luthier AAA or AA | tight, even grain (8–14 lines/inch); no knots / runout / pitch pockets in the playing area |
+| dimensions needed | ~300 × 60 mm playing strip + tabs at each end for the column-foot slot and the soundbox slot | derived from soundboard span C8 → S0 (~238 mm) + margins |
+
+Alternate tonewoods (interchangeable in this design):
+- **Western Red Cedar** — warmer / softer attack, slightly less projection. Cheaper than Sitka.
+- **Engelmann Spruce** — lighter than Sitka, more responsive, but more expensive and slightly less durable.
+- **Adirondack (Red) Spruce** — louder / more dynamic range; pricier and harder to source.
+
+Source: Stewart-MacDonald (StewMac), Luthiers Mercantile International (LMI),
+Notre Dame de Bois (NDB), or any local luthier supplier. Quartersawn 3 mm
+soundboard blanks pre-jointed and pre-thicknessed are available stock items.
+
+Bracing: TBD — small fan-brace or simple ladder bracing of spruce stripping,
+glued to the underside of the soundboard along the string-direction axis.
+
+### Soundbox
+
+Assembly: cheeks (Baltic birch per the layer breakdown above), back, sides,
+internal bracing. Layout TBD.
+
+Fasteners (screws, dowels) and adhesives (Titebond Original PVA for plywood,
+hide glue or Titebond for the soundboard if you want reversibility): TBD.
 
 ## Electronics
 
