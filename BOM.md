@@ -31,6 +31,8 @@ a luthier-supply roll).
 
 12 × CRAFTME Studio 2 mm Tiny Self-Backing Grommets, one per string.
 
+- ASIN: B0DCG6Z83Q
+- Link: <https://www.amazon.com/dp/B0DCG6Z83Q>
 - Inner diameter: 2.0 mm (matches `EYELET_ID_MM` in `babyharp.py`).
 - Self-backing — no separate washer needed.
 - Mounted in the soundboard; string OD sits tangent to upper inner rim under
@@ -76,15 +78,50 @@ on the right cheek).
 
 ## Frame and structural
 
-- Two neck cheeks (mirror images) — laser-cut or CNC'd from the `babyharp_frame.svg` paths.
-- Column / pillar — sandwiched between the two neck cheeks.
-- Joint piece between neck and soundbox, treble end.
-- Neck spacer between joint and the vertical above the G6 eyelet.
-- Soundboard — slot into the column foot at the bass end, into the soundbox
-  at the treble end.
-- Soundbox assembly.
+### Plywood
 
-Materials, fasteners, and adhesives: TBD.
+**Baltic birch plywood, 6 mm (1/4") nominal thickness**, full Baltic birch
+construction (5 plies). Used for every laminated piece below; the 30 mm
+total neck thickness = 5 × 6 mm layers.
+
+Sized so a single sheet (typical 5'×5' / 1525×1525 mm Baltic birch panel)
+can hold all the parts below with significant nesting room for waste.
+
+### Layer breakdown (all 6 mm Baltic birch)
+
+| qty | part            | shape source                                    |
+|-----|-----------------|-------------------------------------------------|
+| 2   | neck cheek      | full neck outline (`neck_back_outline` / `neck_front_outline`) |
+| 3   | neck spacer     | treble-end spacer shape (`neck_spacer_outline`) |
+| 2   | column support  | top portion of column outline (short — overlaps the neck-cheek area by ~30–50 mm) |
+| 3   | column body     | full column outline (`column_outline`), all the way to the soundboard slot |
+| 2   | soundbox cheek  | full soundbox outline (`soundbox_outline`) |
+| 1   | joint piece     | small joint quad (`joint_outline`)              |
+| 1   | soundboard      | TBD — likely a separate tonewood (spruce/cedar), not Baltic birch |
+
+**Total Baltic birch parts: 13.** Plus the soundbox interior / bracing /
+back as designed.
+
+### Assembly
+
+- Glue the 3 column-body layers into one solid 18 mm column first.
+- Glue the 2 column supports flush to either side of the column-top, giving
+  the column a 30 mm-thick "T" at the neck-attach area.
+- The 3 neck-spacer layers glue between the 2 neck cheeks — the assembled
+  neck slides over the column top so the 18 mm spacer slot mates with the
+  18 mm column body, with the 6 mm cheeks flush against the 6 mm column
+  supports on each side. Continuous flat exterior surface results.
+- The spacer / column-body interior is the 18 mm gap that houses the
+  bridge-pin shafts (~4 mm) and the Guyker tuner string-post / lock area
+  (~8–12 mm tall). With 18 mm interior there's comfortable clearance.
+
+### Soundbox / soundboard
+
+- **Soundboard** — separate tonewood (TBD). Slot at the bass end into the
+  column foot, at the treble end into the soundbox.
+- **Soundbox** assembly: cheeks, back, internal bracing (TBD).
+
+Fasteners (screws, dowels) and adhesives (titebond, epoxy): TBD.
 
 ## Electronics
 
