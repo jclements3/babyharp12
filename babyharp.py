@@ -17,6 +17,7 @@ import math, re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
+import svgwrite
 
 # ==================================================================
 # PARAMETERS
@@ -100,7 +101,8 @@ def string_color(note: str) -> str:
 # ==================================================================
 # Existing SVG references — DO NOT EDIT unless the SVG changes
 # ==================================================================
-SVG_PATH = Path(__file__).parent / "babyharp12.svg"
+SVG_PATH       = Path(__file__).parent / "babyharp12.svg"
+FRAME_SRC_PATH = Path(__file__).parent / "babyharp_frame.svg"  # immutable
 
 SMALL_HOLES_INNER = [
     (870.797, 3663.8), (1040.0, 3615.8), (1230.8, 3521.0),
@@ -336,186 +338,142 @@ def main():
               f"{s.length_mm:8.1f} {s.tension_n:6.1f} {s.diameter_mm:7.3f}")
     print(f"pin count = {len(specs)}  ({specs[0].note}..{specs[-1].note})")
 
-    svg = SVG_PATH.read_text()
-
-    # Remove ANY existing <g id="strings"> blocks (depth-aware so labels with
-    # inner <g> from older runs are stripped too).
-    def remove_g_blocks(svg, gid):
-        while True:
-            start = svg.find(f'<g id="{gid}"')
-            if start < 0:
-                return svg
-            i = start; depth = 0
-            while i < len(svg):
-                if svg.startswith('<g', i) and i+2 < len(svg) and svg[i+2] in ' >\t\n':
-                    depth += 1; i += 2
-                elif svg.startswith('</g>', i):
-                    depth -= 1
-                    if depth == 0:
-                        svg = svg[:start] + svg[i+4:]
-                        break
-                    i += 4
-                else:
-                    i += 1
-            else:
-                return svg
-    svg = remove_g_blocks(svg, "strings")
-
-    # Remove the original small-circle (pin) and big-circle (tuner) paths.
-    # The script draws fresh ones at the computed positions.
-    for pid in (# small (pins)
-                "path22","path24","path26","path38","path40","path42",
-                "path44","path46","path60","path62","path64",
-                # big (tuners)
-                "path28","path30","path32","path34","path36","path48",
-                "path50","path52","path54","path56","path58"):
-        svg = re.sub(
-            r'<path[^/]*?id="' + pid + r'"\s*/>', '', svg, count=1)
-
-    paths = []
+    # ==============================================================
+    # Build the output SVG with svgwrite using named groups.
+    # Frame path d-attributes are extracted from the existing SVG (they
+    # come from the original EPS conversion and aren't algorithmic).
+    # ==============================================================
     tuner_r_inner = (BIG_CIRCLE_DIA_MM/2) * INNER_PER_MM
+    src_svg = FRAME_SRC_PATH.read_text()
 
-    # Strings: eyelet -> tangent to pin LEFT -> CW arc on pin -> tangent line
-    # to tuner LEFT -> CW arc on tuner.
-    for i, s in enumerate(specs):
-        sr = (s.diameter_mm/2) * INNER_PER_MM      # string outer radius
+    def frame_d(pid: str) -> str:
+        m = re.search(r'd="([^"]+)"\s+style="[^"]*"\s+id="'+pid+r'"', src_svg)
+        return m.group(1) if m else ""
 
-        # 1) string entry-tangent on the pin (perpendicular foot from pin
-        #    center onto the line through eyelet in str_dir direction).
+    # Originals: neck arch, column-back curve, column-front curve, column-base,
+    # joint, soundbox-left, soundbox-right.
+    d_neck_arch  = frame_d("path20")
+    d_col_back   = frame_d("path68")  # 859.996,3506.9  -> 1244,66.5
+    d_col_front  = frame_d("path70")  # 1787,847.102    -> 859.996,3506.9
+    d_col_base   = frame_d("path66")  # 1244,66.5       -> 1335.2,67.6992
+    d_joint      = frame_d("path72")  # closed thin quad at neck-soundbox junction
+    d_sb_left    = frame_d("path74")  # 2918,2807.3 -> 1339.4,71.3 -> 1337,67.7 -> 2541.2,67.7
+    d_sb_right   = frame_d("path76")  # 2541.2,67.7 -> 3343.4,2608.1 -> 2918,2807.3
+
+    def strip_leading_M(d: str) -> str:
+        return re.sub(r'^[Mm]\s*-?\d+\.?\d*\s*,?\s*-?\d+\.?\d*\s*', '', d).strip()
+
+    def chain(d: str) -> str:
+        """Strip leading M/m and prepend a continuation command. If the tail
+        already starts with a command letter, leave it; otherwise prepend 'l'
+        so the implicit coord pairs are treated as relative linetos."""
+        t = strip_leading_M(d)
+        return ('l ' + t) if (t and t[0] not in 'MmLlHhVvCcSsQqTtAaZz') else t
+
+    # Closed COMBINED paths for each region.
+    d_neck     = f"{d_neck_arch} Z"
+    d_column   = (f"{d_col_front} {chain(d_col_back)} {chain(d_col_base)} "
+                  f"L 1337,67.6992 L 1339.4,71.3008 L 1787,847.102 Z")
+    d_soundbox = f"{d_sb_left} L {strip_leading_M(d_sb_right)} Z"
+    d_joint_z  = d_joint    # path72 is already closed
+
+    # ---- svgwrite document ----
+    dwg = svgwrite.Drawing(
+        SVG_PATH.as_posix(),
+        size=("708.88", "930.78"),
+        viewBox="0 0 708.88 930.78",
+        debug=False,                # turn off strict d-attribute validation
+    )
+    # Outer transforms mirror the original SVG: scale 2x then Y-flip, then 0.1x scale
+    g_root = dwg.g(transform="matrix(2,0,0,-2,0,930.78)")
+    dwg.add(g_root)
+    g_inner = dwg.g(transform="scale(0.1)")
+    g_root.add(g_inner)
+
+    # FRAME GROUPS (one per harp part), each named
+    g_neck = dwg.g(id="neck",
+                   fill="#cc0000", fill_opacity=0.25,
+                   stroke="#cc0000", stroke_width="7.2",
+                   stroke_linecap="round", stroke_linejoin="round")
+    g_neck.add(dwg.path(d=d_neck, id="neck_outline"))
+    g_inner.add(g_neck)
+
+    g_column = dwg.g(id="column",
+                     fill="#00aa00", fill_opacity=0.25,
+                     stroke="#00aa00", stroke_width="7.2",
+                     stroke_linecap="round", stroke_linejoin="round")
+    g_column.add(dwg.path(d=d_column, id="column_outline"))
+    g_inner.add(g_column)
+
+    g_soundbox = dwg.g(id="soundbox",
+                       fill="#0080ff", fill_opacity=0.25,
+                       stroke="#0080ff", stroke_width="7.2",
+                       stroke_linecap="round", stroke_linejoin="round")
+    g_soundbox.add(dwg.path(d=d_soundbox, id="soundbox_outline"))
+    g_inner.add(g_soundbox)
+
+    g_joint = dwg.g(id="joint",
+                    fill="#8b4513", fill_opacity=0.6,
+                    stroke="#8b4513", stroke_width="7.2",
+                    stroke_linecap="round", stroke_linejoin="round")
+    g_joint.add(dwg.path(d=d_joint_z, id="joint_outline"))
+    g_inner.add(g_joint)
+
+    # STRINGS — one path per note, going eyelet -> pin arc -> tuner arc.
+    g_strings = dwg.g(id="strings", fill="none", stroke_linecap="round")
+    for s in specs:
+        sr = (s.diameter_mm/2) * INNER_PER_MM
         v = sub(s.pin, s.eyelet)
         t_entry = v[0]*str_dir[0] + v[1]*str_dir[1]
         pin_entry = add(s.eyelet, mul(str_dir, t_entry))
-
-        # 2) pin exit-tangent: along the takeoff direction, offset perpendicular
-        #    by (pin_r + sr) on the same side as the entry.
-        # The pin->tuner segment direction is `takeoff_dir`; the exit tangent
-        # is perpendicular to takeoff_dir from pin center.
         perp_t = (-takeoff_dir[1], takeoff_dir[0])
-        # pick perp that points toward the same side as the entry (away from tuner-side)
         ent_off = sub(pin_entry, s.pin)
         sign = 1 if (ent_off[0]*perp_t[0] + ent_off[1]*perp_t[1]) > 0 else -1
         pin_exit_outer = (s.pin[0] + sign*perp_t[0]*(pin_r_inner + sr),
                           s.pin[1] + sign*perp_t[1]*(pin_r_inner + sr))
-
-        # 3) tuner entry-tangent: where the line from pin_exit_outer in takeoff_dir
-        #    first touches the tuner OD on the LEFT side.
-        perp_t2 = perp_t  # same perpendicular; use same side
-        tuner_entry = (s.tuner[0] + sign*perp_t2[0]*(tuner_r_inner + sr),
-                       s.tuner[1] + sign*perp_t2[1]*(tuner_r_inner + sr))
-
-        # SVG arc sweep flag: with the SVG Y-flip transform, sweep=0 renders CW
-        # visually. Both pin and tuner wraps are CW.
-        sweep_pin = 0
-        sweep_tuner = 0
-        sw = s.diameter_mm * INNER_PER_MM
-        col = string_color(s.note)
-        r_pin_c = pin_r_inner + sr
-        r_tnr_c = tuner_r_inner + sr
+        tuner_entry = (s.tuner[0] + sign*perp_t[0]*(tuner_r_inner + sr),
+                       s.tuner[1] + sign*perp_t[1]*(tuner_r_inner + sr))
         tuner_end = (2*s.tuner[0] - tuner_entry[0],
                      2*s.tuner[1] - tuner_entry[1])
+        r_pin_c = pin_r_inner + sr
+        r_tnr_c = tuner_r_inner + sr
         d = (f"M {s.eyelet[0]:.2f} {s.eyelet[1]:.2f}"
              f" L {pin_entry[0]:.2f} {pin_entry[1]:.2f}"
-             f" A {r_pin_c:.2f} {r_pin_c:.2f} 0 0 {sweep_pin} "
+             f" A {r_pin_c:.2f} {r_pin_c:.2f} 0 0 0 "
              f"{pin_exit_outer[0]:.2f} {pin_exit_outer[1]:.2f}"
              f" L {tuner_entry[0]:.2f} {tuner_entry[1]:.2f}"
-             f" A {r_tnr_c:.2f} {r_tnr_c:.2f} 0 0 {sweep_tuner} "
+             f" A {r_tnr_c:.2f} {r_tnr_c:.2f} 0 0 0 "
              f"{tuner_end[0]:.2f} {tuner_end[1]:.2f}")
-        paths.append(
-            f'<path d="{d}" '
-            f'style="fill:none;stroke:{col};stroke-width:{sw:.2f};stroke-linecap:round" />'
-        )
+        g_strings.add(dwg.path(d=d, id=f"string_{s.note}",
+                               stroke=string_color(s.note),
+                               stroke_width=f"{s.diameter_mm*INNER_PER_MM:.2f}"))
+    g_inner.add(g_strings)
 
-    # Eyelets
+    # EYELETS
+    g_eyelets = dwg.g(id="eyelets", fill="none",
+                      stroke="#444444", stroke_width="3")
     for s in specs:
-        ex, ey = s.eyelet
-        paths.append(
-            f'<circle cx="{ex:.2f}" cy="{ey:.2f}" r="{eyelet_r_inner:.2f}" '
-            f'style="fill:none;stroke:#444;stroke-width:3" />'
-        )
-    # Pins
-    for s in specs:
-        px, py = s.pin
-        paths.append(
-            f'<circle cx="{px:.2f}" cy="{py:.2f}" r="{pin_r_inner:.2f}" '
-            f'style="fill:#ff8800;fill-opacity:0.5;stroke:#ff8800;stroke-width:3" />'
-        )
-    # Tuners
-    for s in specs:
-        tx, ty = s.tuner
-        paths.append(
-            f'<circle cx="{tx:.2f}" cy="{ty:.2f}" r="{tuner_r_inner:.2f}" '
-            f'style="fill:#9933cc;fill-opacity:0.4;stroke:#9933cc;stroke-width:3" />'
-        )
+        g_eyelets.add(dwg.circle(center=s.eyelet, r=eyelet_r_inner,
+                                 id=f"eyelet_{s.note}"))
+    g_inner.add(g_eyelets)
 
-    # ----- Frame node labels -----
-    # Label the structural vertices of NECK / COLUMN / SOUNDBOX in the matching
-    # region color. Use transform directly on <text> (no wrapping <g>) so the
-    # strings group stays flat and can be cleanly replaced on re-runs.
-    def label(x, y, txt, color):
-        return (f'<text transform="translate({x:.2f},{y:.2f}) scale(1,-1)" '
-                f'font-size="60" font-family="sans-serif" '
-                f'fill="{color}" font-weight="bold" text-anchor="middle">{txt}</text>')
+    # PINS
+    g_pins = dwg.g(id="pins", fill="#ff8800", fill_opacity=0.5,
+                   stroke="#ff8800", stroke_width="3")
+    for s in specs:
+        g_pins.add(dwg.circle(center=s.pin, r=pin_r_inner,
+                              id=f"pin_{s.note}"))
+    g_inner.add(g_pins)
 
-    # Sample additional neck nodes by parsing path20 (the neck outer curve)
-    def parse_abs_pts(d):
-        toks = re.findall(r'[MmLlHhVvZz]|-?\d+\.?\d*', d.strip())
-        i = 0; cx = cy = 0.0; pts = []; last = None
-        while i < len(toks):
-            t = toks[i]
-            if t.isalpha(): cmd = t; i += 1
-            else: cmd = 'L' if last=='M' else ('l' if last=='m' else last)
-            last = cmd
-            if cmd in ('M','m','L','l'):
-                x,y = float(toks[i]), float(toks[i+1]); i += 2
-                if cmd in ('m','l') and pts: cx+=x; cy+=y
-                else: cx=x; cy=y
-                pts.append((cx,cy))
-        return pts
-    m = re.search(r'd="([^"]+)"\s+style="[^"]*"\s+id="path20"', svg)
-    neck_pts = parse_abs_pts(m.group(1)) if m else []
-    if neck_pts:
-        xs=[p[0] for p in neck_pts]; ys=[p[1] for p in neck_pts]
-        NECK_NODES = [
-            neck_pts[0],                       # N0 start
-            neck_pts[xs.index(max(xs))],       # N1 rightmost (back top of head)
-            neck_pts[ys.index(max(ys))],       # N2 topmost
-            neck_pts[xs.index(min(xs))],       # N3 leftmost (back of head)
-            neck_pts[ys.index(min(ys))],       # N4 lowest of curve
-            neck_pts[-1],                      # N5 end
-        ]
-    else:
-        NECK_NODES = [(3354.2, 2638.7), (2929.4, 2837.3)]
-    COLUMN_NODES = [
-        (1787.0,  847.102),  # C0 - foot at soundbox
-        (859.996, 3506.9),   # C1 - top of column
-        (1244.0,  66.5),     # C2 - bottom-left of column base
-        (1335.2,  67.6992),  # C3 - bottom-right of column base
-    ]
-    SOUNDBOX_NODES = [
-        (2918.0,  2807.3),   # S0 - top, meets neck/joint
-        (1339.4,  71.3008),  # S1 - bottom-left of soundboard diagonal
-        (2541.2,  67.6992),  # S2 - bottom-right at base
-        (3343.4,  2608.1),   # S3 - top-right
-    ]
-    # Per-node offsets (inner units) to push each label OUTSIDE its region.
-    # +X = right screen, +Y = UP screen (inner Y positive = up screen).
-    OFF = 250
-    for i, (x, y) in enumerate(NECK_NODES):
-        paths.append(label(x + OFF, y + OFF, f"N{i}", "#cc0000"))
-    col_offsets = [(+OFF, -OFF), (-OFF, +OFF), (-OFF, -OFF), (+OFF*2, -OFF)]
-    for i, (x, y) in enumerate(COLUMN_NODES):
-        ox, oy = col_offsets[i]
-        paths.append(label(x + ox, y + oy, f"C{i}", "#00aa00"))
-    sb_offsets = [(+OFF*2, +OFF), (-OFF, -OFF), (+OFF, -OFF), (+OFF*2, +OFF)]
-    for i, (x, y) in enumerate(SOUNDBOX_NODES):
-        ox, oy = sb_offsets[i]
-        paths.append(label(x + ox, y + oy, f"S{i}", "#0080ff"))
-    new_group = ('<g id="strings" style="fill:none;stroke-linecap:round">'
-                 + "".join(paths) + "</g>")
-    new = re.sub(r'<g id="strings"[^<]*(?:<[^/]+/>)+</g>', new_group, svg)
-    if new == svg:
-        new = svg.replace('id="path76" />', f'id="path76" />{new_group}')
-    SVG_PATH.write_text(new)
+    # TUNERS
+    g_tuners = dwg.g(id="tuners", fill="#9933cc", fill_opacity=0.4,
+                     stroke="#9933cc", stroke_width="3")
+    for s in specs:
+        g_tuners.add(dwg.circle(center=s.tuner, r=tuner_r_inner,
+                                id=f"tuner_{s.note}"))
+    g_inner.add(g_tuners)
+
+    dwg.save()
 
 if __name__ == "__main__":
     main()
